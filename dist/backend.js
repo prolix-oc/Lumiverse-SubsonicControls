@@ -322,16 +322,17 @@ function send(message, userId) {
   spindle.sendToFrontend(message, userId);
 }
 async function loadConfig(userId) {
-  const stored = await spindle.userStorage.getJson("config.json", { fallback: { integration: "subsonic", serverUrl: "", username: "", enableJukebox: false }, userId });
-  const integration = stored.integration === "feishin" ? "feishin" : "subsonic";
+  const stored = await spindle.userStorage.getJson("config.json", { fallback: { serverUrl: "", username: "", enableJukebox: false, remoteControl: "none", feishinUrl: "", feishinUsername: "" }, userId });
   const password = await spindle.enclave.get("subsonic_password", userId);
-  if (!stored.serverUrl || integration === "subsonic" && (!stored.username || !password))
+  const feishinPassword = await spindle.enclave.get("feishin_password", userId);
+  if (!stored.serverUrl || !stored.username || !password)
     return null;
-  return { ...stored, integration, password: password || "" };
+  const remoteControl = stored.remoteControl === "feishin" || stored.remoteControl === "jukebox" ? stored.remoteControl : stored.enableJukebox ? "jukebox" : "none";
+  return { ...stored, remoteControl, enableJukebox: remoteControl === "jukebox", feishinUrl: stored.feishinUrl || "", feishinUsername: stored.feishinUsername || "", password, feishinPassword: feishinPassword || "" };
 }
 async function loadUser(userId) {
   const config = await loadConfig(userId);
-  setConfig(userId, config?.integration === "subsonic" ? config : null);
+  setConfig(userId, config);
   setActiveUser(userId);
   activeUserId2 = userId;
   if (config && await verifyConfiguredJukebox(config, userId))
@@ -378,9 +379,10 @@ function syncLyricsForTrackChange(userId, previousTrackUri, state) {
   getLyricsForState(state, userId);
 }
 async function saveConfig(config, userId) {
-  await spindle.userStorage.setJson("config.json", { integration: config.integration, serverUrl: config.serverUrl, username: config.username, enableJukebox: config.enableJukebox }, { userId });
+  await spindle.userStorage.setJson("config.json", { serverUrl: config.serverUrl, username: config.username, enableJukebox: config.enableJukebox, remoteControl: config.remoteControl, feishinUrl: config.feishinUrl, feishinUsername: config.feishinUsername }, { userId });
   await spindle.enclave.put("subsonic_password", config.password, userId);
-  setConfig(userId, config.integration === "subsonic" ? config : null);
+  await spindle.enclave.put("feishin_password", config.feishinPassword, userId);
+  setConfig(userId, config);
 }
 async function verifyConfiguredJukebox(config, userId) {
   if (!config.enableJukebox) {
@@ -398,6 +400,7 @@ async function verifyConfiguredJukebox(config, userId) {
     if (!isJukeboxUnavailableError(error))
       throw error;
     config.enableJukebox = false;
+    config.remoteControl = "none";
     jukeboxUnavailableReasons.set(userId, error.message);
     jukeboxAvailabilityChecked.add(userId);
     spindle.log.warn(`Jukebox disabled for ${userId}: ${error.message}`);
@@ -413,7 +416,7 @@ function stopPolling(userId) {
 }
 async function pushState(userId) {
   const config = await loadConfig(userId);
-  if (config?.integration === "feishin") {
+  if (config?.remoteControl === "feishin") {
     const state2 = stateByUser.get(userId) || null;
     pushPlaybackMacros(state2);
     send({ type: "state", playbackState: state2, connected: true }, userId);
@@ -458,7 +461,7 @@ function startPolling(userId) {
 }
 async function sendConfig(userId) {
   const config = await loadConfig(userId);
-  send({ type: "config", integration: config?.integration || "subsonic", serverUrl: config?.serverUrl || "", username: config?.username || "", hasPassword: !!config?.password, enableJukebox: !!config?.enableJukebox, jukeboxUnavailableReason: jukeboxUnavailableReasons.get(userId) || null, connected: !!config }, userId);
+  send({ type: "config", serverUrl: config?.serverUrl || "", username: config?.username || "", hasPassword: !!config?.password, remoteControl: config?.remoteControl || "none", feishinUrl: config?.feishinUrl || "", feishinUsername: config?.feishinUsername || "", hasFeishinPassword: !!config?.feishinPassword, jukeboxUnavailableReason: jukeboxUnavailableReasons.get(userId) || null, connected: !!config }, userId);
 }
 async function updateTheme(colors, userId) {
   if (!colors) {
@@ -476,25 +479,28 @@ spindle.onFrontendMessage(async (raw, userId) => {
         await sendConfig(userId);
         if (isConnected(userId)) {
           await pushState(userId);
-          startPolling(userId);
+          if ((await loadConfig(userId))?.remoteControl !== "feishin")
+            startPolling(userId);
         }
         break;
       case "get_state":
         await pushState(userId);
-        startPolling(userId);
+        if ((await loadConfig(userId))?.remoteControl !== "feishin")
+          startPolling(userId);
         break;
       case "connect": {
-        const config = { integration: message.integration, serverUrl: message.serverUrl, username: message.username, password: message.password, enableJukebox: message.integration === "subsonic" && message.enableJukebox };
-        setConfig(userId, config.integration === "subsonic" ? config : null);
-        if (config.integration === "subsonic")
-          await ping(userId);
+        const config = { serverUrl: message.serverUrl, username: message.username, password: message.password, remoteControl: message.remoteControl, enableJukebox: message.remoteControl === "jukebox", feishinUrl: message.feishinUrl, feishinUsername: message.feishinUsername, feishinPassword: message.feishinPassword };
+        setConfig(userId, config);
+        await ping(userId);
+        stateByUser.delete(userId);
+        stateObservedAt.delete(userId);
         jukeboxAvailabilityChecked.delete(userId);
-        if (config.integration === "subsonic")
+        if (config.enableJukebox)
           await verifyConfiguredJukebox(config, userId);
         await saveConfig(config, userId);
         send({ type: "connected" }, userId);
         await sendConfig(userId);
-        if (config.integration === "subsonic")
+        if (config.remoteControl !== "feishin")
           startPolling(userId);
         break;
       }
@@ -510,6 +516,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         pushPlaybackMacros(null);
         await spindle.userStorage.delete("config.json", userId).catch(() => {});
         await spindle.enclave.delete("subsonic_password", userId);
+        await spindle.enclave.delete("feishin_password", userId);
         await updateTheme(null, userId);
         send({ type: "disconnected" }, userId);
         send({ type: "state", playbackState: null, connected: false }, userId);
@@ -519,7 +526,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         stateObservedAt.set(userId, Date.now());
         pushPlaybackMacros(message.playbackState);
         syncLyricsForTrackChange(userId, null, message.playbackState);
-        send({ type: "state", playbackState: message.playbackState, connected: message.connected }, userId);
+        send({ type: "state", playbackState: message.playbackState, connected: isConnected(userId) }, userId);
         break;
       case "play":
         await play(message.trackUri, userId);
@@ -547,11 +554,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
         await sendChatSongs(message.chatId, userId);
         break;
       case "get_lyrics": {
-        const config = await loadConfig(userId);
-        if (config?.integration === "feishin") {
-          send({ type: "lyrics", trackUri: stateByUser.get(userId)?.trackUri || "", plainLyrics: null, syncedLyrics: null, instrumental: false }, userId);
-          break;
-        }
         const state = stateByUser.get(userId) || await pushState(userId);
         const lyrics = state ? await getLyricsForState(state, userId) : null;
         send({

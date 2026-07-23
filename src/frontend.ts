@@ -1,5 +1,5 @@
 import type { SpindleFrontendContext, SpindleFloatWidgetHandle } from "lumiverse-spindle-types";
-import type { AlbumColors, BackendToFrontend, FrontendToBackend, IntegrationType, MiniPlayerStyle, PlaybackState } from "./types";
+import type { AlbumColors, BackendToFrontend, FrontendToBackend, MiniPlayerStyle, PlaybackState, RemoteControl } from "./types";
 import { FeishinRemoteClient } from "./feishin-remote";
 import { SPOTIFY_WIDGET_CSS } from "./ui/spotify-widget-styles";
 import { createSettingsUI } from "./ui/settings";
@@ -143,13 +143,13 @@ export function setup(ctx: SpindleFrontendContext) {
     });
   }
 
-  let integration: IntegrationType = "subsonic";
+  let remoteControl: RemoteControl = "none";
   let feishin: FeishinRemoteClient | null = null;
   let pendingFeishinCredentials: { serverUrl: string; username: string; password: string } | null = null;
   const settings = createSettingsUI((message) => {
-    const candidate = message as { type?: string; integration?: IntegrationType; serverUrl?: string; username?: string; password?: string };
-    if (candidate.type === "connect" && candidate.integration === "feishin") {
-      pendingFeishinCredentials = { serverUrl: candidate.serverUrl || "", username: candidate.username || "", password: candidate.password || "" };
+    const candidate = message as { type?: string; remoteControl?: RemoteControl; feishinUrl?: string; feishinUsername?: string; feishinPassword?: string };
+    if (candidate.type === "connect" && candidate.remoteControl === "feishin") {
+      pendingFeishinCredentials = { serverUrl: candidate.feishinUrl || "", username: candidate.feishinUsername || "", password: candidate.feishinPassword || "" };
     }
     send(message);
   });
@@ -188,7 +188,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
   const nowPlaying = createNowPlayingUI();
   const sendPlayerCommand = (message: { type: "play" | "pause" | "next" | "previous"; trackUri?: string }) => {
-    if (integration === "feishin") {
+    if (remoteControl === "feishin") {
       feishin?.send(message.type);
       return;
     }
@@ -207,6 +207,9 @@ export function setup(ctx: SpindleFrontendContext) {
   let configuredServerUrl = "";
   let configuredUsername = "";
   let configuredHasPassword = false;
+  let configuredFeishinUrl = "";
+  let configuredFeishinUsername = "";
+  let configuredHasFeishinPassword = false;
   let configuredJukeboxUnavailableReason: string | null = null;
   type ArtShape = "circle" | "squircle";
   type SizeMode = "small" | "medium" | "large" | "custom";
@@ -705,42 +708,43 @@ export function setup(ctx: SpindleFrontendContext) {
     const message = raw as BackendToFrontend;
     switch (message.type) {
       case "config":
-        integration = message.integration;
+        remoteControl = message.remoteControl;
         connected = message.connected;
-        jukeboxEnabled = message.enableJukebox;
+        jukeboxEnabled = message.remoteControl === "jukebox";
         configuredServerUrl = message.serverUrl;
         configuredUsername = message.username;
         configuredHasPassword = message.hasPassword;
+        configuredFeishinUrl = message.feishinUrl;
+        configuredFeishinUsername = message.feishinUsername;
+        configuredHasFeishinPassword = message.hasFeishinPassword;
         configuredJukeboxUnavailableReason = message.jukeboxUnavailableReason;
-        settings.update(message.connected, message.integration, message.serverUrl, message.username, message.hasPassword, message.enableJukebox, message.jukeboxUnavailableReason);
-        if (message.integration === "feishin" && message.serverUrl) {
+        settings.update(message.connected, message.serverUrl, message.username, message.hasPassword, message.remoteControl, message.feishinUrl, message.feishinUsername, message.hasFeishinPassword, message.jukeboxUnavailableReason);
+        if (message.remoteControl === "feishin" && message.feishinUrl) {
           if (!feishin) {
             feishin = new FeishinRemoteClient(
               (state, isConnected) => send({ type: "feishin_state", playbackState: state, connected: isConnected }),
               (error) => console.warn("[Subsonic Controls]", error),
             );
           }
-          const credentials = pendingFeishinCredentials?.serverUrl === message.serverUrl
+          const credentials = pendingFeishinCredentials?.serverUrl === message.feishinUrl
             ? pendingFeishinCredentials
-            : { username: message.username, password: "" };
+            : { username: message.feishinUsername, password: "" };
           pendingFeishinCredentials = null;
-          feishin.connect(message.serverUrl, credentials.username, credentials.password);
+          feishin.connect(message.feishinUrl, credentials.username, credentials.password);
         } else {
           feishin?.disconnect();
           feishin = null;
         }
-        search.setAvailable(message.integration === "subsonic");
-        controls.update(currentState, connected, message.integration === "feishin" || jukeboxEnabled, message.integration === "feishin" ? "Feishin Controls" : "Jukebox Controls");
+        search.setAvailable(true);
+        search.setPlaybackAvailable(message.remoteControl === "jukebox");
+        controls.update(currentState, connected, message.remoteControl !== "none", message.remoteControl === "feishin" ? "Feishin Controls" : "Jukebox Controls");
         syncWidget();
         break;
       case "state":
         connected = message.connected;
         currentState = message.playbackState;
-        if (integration === "feishin") {
-          settings.update(connected, integration, configuredServerUrl, configuredUsername, configuredHasPassword, false, configuredJukeboxUnavailableReason);
-        }
         nowPlaying.update(currentState, connected);
-        controls.update(currentState, connected, integration === "feishin" || jukeboxEnabled, integration === "feishin" ? "Feishin Controls" : "Jukebox Controls");
+        controls.update(currentState, connected, remoteControl !== "none", remoteControl === "feishin" ? "Feishin Controls" : "Jukebox Controls");
         lyrics.updatePlayback(currentState);
         if (currentState?.trackUri && currentState.trackUri !== lyricsTrackId) {
           lyricsTrackId = currentState.trackUri;
@@ -782,8 +786,9 @@ export function setup(ctx: SpindleFrontendContext) {
       case "disconnected":
         feishin?.disconnect(); feishin = null;
         connected = false; currentState = null; lyricsTrackId = null; jukeboxEnabled = false;
-        settings.update(false, integration, configuredServerUrl, configuredUsername, configuredHasPassword, false, null);
-        search.setAvailable(integration === "subsonic");
+        settings.update(false, configuredServerUrl, configuredUsername, configuredHasPassword, remoteControl, configuredFeishinUrl, configuredFeishinUsername, configuredHasFeishinPassword, null);
+        search.setAvailable(true);
+        search.setPlaybackAvailable(remoteControl === "jukebox");
         lastThemeArtUrl = null;
         clearAlbumTheme();
         nowPlaying.update(null, false); controls.update(null, false, false); lyrics.clear();
@@ -838,7 +843,7 @@ export function setup(ctx: SpindleFrontendContext) {
     jukeboxEnabled = false;
     lastThemeArtUrl = null;
     clearAlbumTheme();
-    settings.update(false, "subsonic", "", "", false, false, null);
+    settings.update(false, "", "", false, "none", "", "", false, null);
     nowPlaying.update(null, false);
     controls.update(null, false, false);
     lyrics.clear();

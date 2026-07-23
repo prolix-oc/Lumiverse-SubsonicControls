@@ -1,7 +1,7 @@
 export type FrontendToBackend =
   | { type: "get_state" }
   | { type: "get_config" }
-  | { type: "connect"; integration: IntegrationType; serverUrl: string; username: string; password: string; enableJukebox: boolean }
+  | { type: "connect"; serverUrl: string; username: string; password: string; remoteControl: RemoteControl; feishinUrl: string; feishinUsername: string; feishinPassword: string }
   | { type: "disconnect" }
   | { type: "feishin_state"; connected: boolean; playbackState: PlaybackState | null }
   | { type: "play"; trackUri?: string }
@@ -16,7 +16,7 @@ export type FrontendToBackend =
 
 export type BackendToFrontend =
   | { type: "state"; playbackState: PlaybackState | null; connected: boolean }
-  | { type: "config"; integration: IntegrationType; serverUrl: string; username: string; hasPassword: boolean; enableJukebox: boolean; jukeboxUnavailableReason: string | null; connected: boolean }
+  | { type: "config"; serverUrl: string; username: string; hasPassword: boolean; remoteControl: RemoteControl; feishinUrl: string; feishinUsername: string; hasFeishinPassword: boolean; jukeboxUnavailableReason: string | null; connected: boolean }
   | { type: "search_results"; results: SearchResult[] }
   | { type: "chat_songs"; chatId: string; entries: MessageSongEntry[] }
   | { type: "message_song"; chatId: string; messageId: string; swipeId: number; snapshot: SongSnapshot }
@@ -97,11 +97,15 @@ export interface AlbumColors {
 }
 
 export interface SubsonicConfig {
-  integration: IntegrationType;
   serverUrl: string;
   username: string;
   password: string;
+  /** Kept for the Subsonic API adapter; derived from remoteControl. */
   enableJukebox: boolean;
+  remoteControl: RemoteControl;
+  feishinUrl: string;
+  feishinUsername: string;
+  feishinPassword: string;
 }
 
-export type IntegrationType = "subsonic" | "feishin";
+export type RemoteControl = "none" | "jukebox" | "feishin";

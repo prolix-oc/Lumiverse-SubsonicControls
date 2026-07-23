@@ -2386,103 +2386,116 @@ function createSettingsUI(sendToBackend) {
   header.append(title, status);
   const body = document.createElement("div");
   body.className = "spotify-settings-card-body";
-  const integrationLabel = document.createElement("label");
-  integrationLabel.className = "spotify-settings-label";
-  integrationLabel.textContent = "Connection type";
-  const integration = document.createElement("select");
-  integration.className = "spotify-input";
-  for (const [value, label] of [["subsonic", "Subsonic / OpenSubsonic"], ["feishin", "Feishin Desktop Remote"]]) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = label;
-    integration.appendChild(option);
-  }
-  integrationLabel.appendChild(integration);
-  body.appendChild(integrationLabel);
-  const makeField = (label, type, placeholder) => {
+  const makeField = (labelText, type, placeholder) => {
     const wrapper = document.createElement("label");
     wrapper.className = "spotify-settings-label";
-    wrapper.textContent = label;
+    const label = document.createTextNode(labelText);
+    wrapper.append(label);
     const input = document.createElement("input");
     input.className = "spotify-input";
     input.type = type;
     input.placeholder = placeholder;
-    wrapper.appendChild(input);
-    body.appendChild(wrapper);
+    wrapper.append(input);
+    body.append(wrapper);
     return input;
   };
-  const serverUrl = makeField("Server URL", "url", "https://music.example.com (or …/rest)");
-  const username = makeField("Username", "text", "Subsonic username");
-  const password = makeField("Password", "password", "Subsonic password");
-  const jukeboxLabel = document.createElement("label");
-  jukeboxLabel.className = "spotify-settings-label";
-  const jukebox = document.createElement("input");
-  jukebox.type = "checkbox";
-  jukebox.style.marginRight = "8px";
-  jukeboxLabel.append(jukebox, "Enable server-side Jukebox controls");
-  const note = document.createElement("div");
-  note.style.cssText = "font-size:0.8em;opacity:0.65;margin-top:4px";
-  note.textContent = "Search, now-playing and lyrics work with compatible servers. Play, pause, skip and queue require the optional Jukebox endpoint and affect that server-side player.";
-  jukeboxLabel.appendChild(note);
+  const serverUrl = makeField("Subsonic server URL", "url", "https://music.example.com (or …/rest)");
+  const username = makeField("Subsonic username", "text", "Subsonic username");
+  const password = makeField("Subsonic password", "password", "Subsonic password");
+  const controllerLabel = document.createElement("label");
+  controllerLabel.className = "spotify-settings-label";
+  controllerLabel.append("Playback controls");
+  const controller = document.createElement("select");
+  controller.className = "spotify-input";
+  for (const [value, label] of [["none", "Now playing only"], ["jukebox", "Server-side Jukebox"], ["feishin", "Feishin Desktop Remote"]]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    controller.append(option);
+  }
+  controllerLabel.append(controller);
+  body.append(controllerLabel);
+  const jukeboxNote = document.createElement("div");
+  jukeboxNote.style.cssText = "font-size:0.8em;opacity:0.65;margin-top:4px";
+  jukeboxNote.textContent = "Jukebox controls affect the server-side player.";
+  body.append(jukeboxNote);
   const jukeboxUnavailable = document.createElement("div");
   jukeboxUnavailable.style.cssText = "display:none;font-size:0.8em;color:#e74c3c;margin-top:4px";
-  jukeboxLabel.appendChild(jukeboxUnavailable);
-  body.appendChild(jukeboxLabel);
+  body.append(jukeboxUnavailable);
+  const feishinFields = document.createElement("div");
+  feishinFields.style.display = "none";
+  const makeFeishinField = (labelText, type, placeholder) => {
+    const wrapper = document.createElement("label");
+    wrapper.className = "spotify-settings-label";
+    wrapper.append(labelText);
+    const input = document.createElement("input");
+    input.className = "spotify-input";
+    input.type = type;
+    input.placeholder = placeholder;
+    wrapper.append(input);
+    feishinFields.append(wrapper);
+    return input;
+  };
+  const feishinUrl = makeFeishinField("Feishin Remote URL", "url", "http://192.168.1.20:4333");
+  const feishinUsername = makeFeishinField("Feishin username", "text", "Optional Remote username");
+  const feishinPassword = makeFeishinField("Feishin password", "password", "Optional Remote password");
+  const feishinNote = document.createElement("div");
+  feishinNote.style.cssText = "font-size:0.8em;opacity:0.65;margin-top:4px";
+  feishinNote.textContent = "Connects directly to Feishin's desktop Remote server; library search and lyrics still use the Subsonic server above.";
+  feishinFields.append(feishinNote);
+  body.append(feishinFields);
   const actions = document.createElement("div");
   actions.className = "spotify-settings-row";
   const button = document.createElement("button");
   button.className = "spotify-btn spotify-btn-primary";
-  actions.appendChild(button);
-  body.appendChild(actions);
+  actions.append(button);
+  body.append(actions);
   root.append(header, body);
   let isConnected = false;
-  function updateTypeCopy() {
-    const isFeishin = integration.value === "feishin";
-    serverUrl.previousSibling.textContent = isFeishin ? "Feishin Remote URL" : "Server URL";
-    serverUrl.placeholder = isFeishin ? "http://192.168.1.20:4333" : "https://music.example.com (or …/rest)";
-    username.placeholder = isFeishin ? "Optional Remote username" : "Subsonic username";
-    password.placeholder = isFeishin ? "Optional Remote password" : "Subsonic password";
-    jukeboxLabel.style.display = isFeishin ? "none" : "";
+  function syncControllerFields() {
+    const isFeishin = controller.value === "feishin";
+    feishinFields.style.display = isFeishin ? "" : "none";
+    jukeboxNote.style.display = controller.value === "jukebox" ? "" : "none";
+    jukeboxUnavailable.style.display = controller.value === "jukebox" && jukeboxUnavailable.textContent ? "" : "none";
   }
-  integration.onchange = updateTypeCopy;
-  function update(connected, connectionType, url, user, hasPassword, enableJukebox, jukeboxUnavailableReason) {
+  controller.onchange = syncControllerFields;
+  function update(connected, url, user, hasPassword, remoteControl, remoteUrl, remoteUser, hasRemotePassword, unavailable) {
     isConnected = connected;
-    integration.value = connectionType;
     if (url)
       serverUrl.value = url;
     if (user)
       username.value = user;
-    jukebox.checked = enableJukebox;
-    jukeboxUnavailable.textContent = jukeboxUnavailableReason || "";
-    jukeboxUnavailable.style.display = jukeboxUnavailableReason ? "" : "none";
-    updateTypeCopy();
-    for (const input of [integration, serverUrl, username, password, jukebox])
+    if (remoteUrl)
+      feishinUrl.value = remoteUrl;
+    if (remoteUser)
+      feishinUsername.value = remoteUser;
+    controller.value = remoteControl;
+    jukeboxUnavailable.textContent = unavailable || "";
+    syncControllerFields();
+    for (const input of [serverUrl, username, password, controller, feishinUrl, feishinUsername, feishinPassword])
       input.disabled = connected;
     password.value = "";
+    feishinPassword.value = "";
     password.placeholder = hasPassword ? "Saved securely (re-enter to change)" : "Subsonic password";
+    feishinPassword.placeholder = hasRemotePassword ? "Saved securely (re-enter to change)" : "Optional Remote password";
     button.textContent = connected ? "Disconnect" : "Connect";
     button.className = connected ? "spotify-btn spotify-btn-danger" : "spotify-btn spotify-btn-primary";
     button.disabled = false;
     status.innerHTML = connected ? '<span class="spotify-status-dot connected"></span>Connected' : '<span class="spotify-status-dot disconnected"></span>Not connected';
   }
-  button.addEventListener("click", () => {
-    if (isConnected) {
-      sendToBackend({ type: "disconnect" });
-      return;
-    }
-    const url = serverUrl.value.trim();
-    const user = username.value.trim();
-    const pass = password.value;
-    const isFeishin = integration.value === "feishin";
-    if (!url || !isFeishin && (!user || !pass)) {
-      status.innerHTML = `<span class="spotify-status-dot disconnected"></span><span style="color:#e74c3c">${isFeishin ? "Feishin Remote URL is required" : "Server URL, username and password are required"}</span>`;
+  button.onclick = () => {
+    if (isConnected)
+      return void sendToBackend({ type: "disconnect" });
+    const remoteControl = controller.value;
+    if (!serverUrl.value.trim() || !username.value.trim() || !password.value || remoteControl === "feishin" && !feishinUrl.value.trim()) {
+      status.innerHTML = '<span class="spotify-status-dot disconnected"></span><span style="color:#e74c3c">Enter the Subsonic server credentials and, when selected, a Feishin Remote URL.</span>';
       return;
     }
     button.disabled = true;
     button.textContent = "Connecting…";
-    sendToBackend({ type: "connect", integration: integration.value, serverUrl: url, username: user, password: pass, enableJukebox: jukebox.checked });
-  });
-  update(false, "subsonic", "", "", false, false, null);
+    sendToBackend({ type: "connect", serverUrl: serverUrl.value.trim(), username: username.value.trim(), password: password.value, remoteControl, feishinUrl: feishinUrl.value.trim(), feishinUsername: feishinUsername.value.trim(), feishinPassword: feishinPassword.value });
+  };
+  update(false, "", "", false, "none", "", "", false, null);
   return { root, update, setConnecting() {
     button.disabled = true;
     button.textContent = "Connecting…";
@@ -2710,6 +2723,7 @@ function createSearchUI(send) {
   list.className = "spotify-search-results";
   root.append(title, input, list);
   let timer = null;
+  let playbackAvailable = true;
   input.oninput = () => {
     if (timer)
       clearTimeout(timer);
@@ -2749,20 +2763,23 @@ function createSearchUI(send) {
       detail.className = "spotify-search-item-artist";
       detail.textContent = `${result.artist} — ${result.album}`;
       info.append(name, detail);
-      const actions = document.createElement("div");
-      actions.className = "spotify-search-item-actions";
-      const play = document.createElement("button");
-      play.className = "spotify-search-item-btn";
-      play.title = "Play in server Jukebox";
-      play.innerHTML = PLAY2;
-      play.onclick = () => send({ type: "play", trackUri: result.uri });
-      const queue = document.createElement("button");
-      queue.className = "spotify-search-item-btn";
-      queue.title = "Add to server Jukebox queue";
-      queue.innerHTML = QUEUE;
-      queue.onclick = () => send({ type: "queue", trackUri: result.uri });
-      actions.append(play, queue);
-      item.append(info, actions);
+      if (playbackAvailable) {
+        const actions = document.createElement("div");
+        actions.className = "spotify-search-item-actions";
+        const play = document.createElement("button");
+        play.className = "spotify-search-item-btn";
+        play.title = "Play in server Jukebox";
+        play.innerHTML = PLAY2;
+        play.onclick = () => send({ type: "play", trackUri: result.uri });
+        const queue = document.createElement("button");
+        queue.className = "spotify-search-item-btn";
+        queue.title = "Add to server Jukebox queue";
+        queue.innerHTML = QUEUE;
+        queue.onclick = () => send({ type: "queue", trackUri: result.uri });
+        actions.append(play, queue);
+        item.append(info, actions);
+      } else
+        item.append(info);
       list.appendChild(item);
     }
   };
@@ -2770,6 +2787,9 @@ function createSearchUI(send) {
     root.style.display = available ? "" : "none";
     if (!available)
       list.innerHTML = "";
+  }, setPlaybackAvailable(available) {
+    playbackAvailable = available;
+    list.innerHTML = "";
   }, destroy() {
     if (timer)
       clearTimeout(timer);
@@ -5101,13 +5121,13 @@ function setup(ctx) {
       });
     });
   }
-  let integration = "subsonic";
+  let remoteControl = "none";
   let feishin = null;
   let pendingFeishinCredentials = null;
   const settings = createSettingsUI((message) => {
     const candidate = message;
-    if (candidate.type === "connect" && candidate.integration === "feishin") {
-      pendingFeishinCredentials = { serverUrl: candidate.serverUrl || "", username: candidate.username || "", password: candidate.password || "" };
+    if (candidate.type === "connect" && candidate.remoteControl === "feishin") {
+      pendingFeishinCredentials = { serverUrl: candidate.feishinUrl || "", username: candidate.feishinUsername || "", password: candidate.feishinPassword || "" };
     }
     send(message);
   });
@@ -5145,7 +5165,7 @@ function setup(ctx) {
   });
   const nowPlaying = createNowPlayingUI();
   const sendPlayerCommand = (message) => {
-    if (integration === "feishin") {
+    if (remoteControl === "feishin") {
       feishin?.send(message.type);
       return;
     }
@@ -5163,6 +5183,9 @@ function setup(ctx) {
   let configuredServerUrl = "";
   let configuredUsername = "";
   let configuredHasPassword = false;
+  let configuredFeishinUrl = "";
+  let configuredFeishinUsername = "";
+  let configuredHasFeishinPassword = false;
   let configuredJukeboxUnavailableReason = null;
   const DEFAULT_SIZE_PRESETS = { small: 36, medium: 48, large: 64 };
   const MODERN_SIZE_PRESETS = { small: 112, medium: 128, large: 144 };
@@ -5641,37 +5664,38 @@ function setup(ctx) {
     const message = raw;
     switch (message.type) {
       case "config":
-        integration = message.integration;
+        remoteControl = message.remoteControl;
         connected = message.connected;
-        jukeboxEnabled = message.enableJukebox;
+        jukeboxEnabled = message.remoteControl === "jukebox";
         configuredServerUrl = message.serverUrl;
         configuredUsername = message.username;
         configuredHasPassword = message.hasPassword;
+        configuredFeishinUrl = message.feishinUrl;
+        configuredFeishinUsername = message.feishinUsername;
+        configuredHasFeishinPassword = message.hasFeishinPassword;
         configuredJukeboxUnavailableReason = message.jukeboxUnavailableReason;
-        settings.update(message.connected, message.integration, message.serverUrl, message.username, message.hasPassword, message.enableJukebox, message.jukeboxUnavailableReason);
-        if (message.integration === "feishin" && message.serverUrl) {
+        settings.update(message.connected, message.serverUrl, message.username, message.hasPassword, message.remoteControl, message.feishinUrl, message.feishinUsername, message.hasFeishinPassword, message.jukeboxUnavailableReason);
+        if (message.remoteControl === "feishin" && message.feishinUrl) {
           if (!feishin) {
             feishin = new FeishinRemoteClient((state, isConnected) => send({ type: "feishin_state", playbackState: state, connected: isConnected }), (error) => console.warn("[Subsonic Controls]", error));
           }
-          const credentials = pendingFeishinCredentials?.serverUrl === message.serverUrl ? pendingFeishinCredentials : { username: message.username, password: "" };
+          const credentials = pendingFeishinCredentials?.serverUrl === message.feishinUrl ? pendingFeishinCredentials : { username: message.feishinUsername, password: "" };
           pendingFeishinCredentials = null;
-          feishin.connect(message.serverUrl, credentials.username, credentials.password);
+          feishin.connect(message.feishinUrl, credentials.username, credentials.password);
         } else {
           feishin?.disconnect();
           feishin = null;
         }
-        search.setAvailable(message.integration === "subsonic");
-        controls.update(currentState, connected, message.integration === "feishin" || jukeboxEnabled, message.integration === "feishin" ? "Feishin Controls" : "Jukebox Controls");
+        search.setAvailable(true);
+        search.setPlaybackAvailable(message.remoteControl === "jukebox");
+        controls.update(currentState, connected, message.remoteControl !== "none", message.remoteControl === "feishin" ? "Feishin Controls" : "Jukebox Controls");
         syncWidget();
         break;
       case "state":
         connected = message.connected;
         currentState = message.playbackState;
-        if (integration === "feishin") {
-          settings.update(connected, integration, configuredServerUrl, configuredUsername, configuredHasPassword, false, configuredJukeboxUnavailableReason);
-        }
         nowPlaying.update(currentState, connected);
-        controls.update(currentState, connected, integration === "feishin" || jukeboxEnabled, integration === "feishin" ? "Feishin Controls" : "Jukebox Controls");
+        controls.update(currentState, connected, remoteControl !== "none", remoteControl === "feishin" ? "Feishin Controls" : "Jukebox Controls");
         lyrics.updatePlayback(currentState);
         if (currentState?.trackUri && currentState.trackUri !== lyricsTrackId) {
           lyricsTrackId = currentState.trackUri;
@@ -5720,8 +5744,9 @@ function setup(ctx) {
         currentState = null;
         lyricsTrackId = null;
         jukeboxEnabled = false;
-        settings.update(false, integration, configuredServerUrl, configuredUsername, configuredHasPassword, false, null);
-        search.setAvailable(integration === "subsonic");
+        settings.update(false, configuredServerUrl, configuredUsername, configuredHasPassword, remoteControl, configuredFeishinUrl, configuredFeishinUsername, configuredHasFeishinPassword, null);
+        search.setAvailable(true);
+        search.setPlaybackAvailable(remoteControl === "jukebox");
         lastThemeArtUrl = null;
         clearAlbumTheme();
         nowPlaying.update(null, false);
@@ -5784,7 +5809,7 @@ function setup(ctx) {
     jukeboxEnabled = false;
     lastThemeArtUrl = null;
     clearAlbumTheme();
-    settings.update(false, "subsonic", "", "", false, false, null);
+    settings.update(false, "", "", false, "none", "", "", false, null);
     nowPlaying.update(null, false);
     controls.update(null, false, false);
     lyrics.clear();
