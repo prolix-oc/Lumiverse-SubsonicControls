@@ -5636,9 +5636,9 @@ function setup(ctx) {
   window.addEventListener("spindle:desktop-widget-returned", handleDesktopWidgetReturned);
   cleanups.push(() => window.removeEventListener("spindle:desktop-widget-returned", handleDesktopWidgetReturned));
   ctx.permissions.getGranted().then((granted) => {
-    const needed = ["cors_proxy", "generation", "chat_mutation"].filter((permission) => !granted.includes(permission));
+    const needed = ["cors_proxy", "ui_panels", "app_manipulation", "generation", "chat_mutation"].filter((permission) => !granted.includes(permission));
     if (needed.length) {
-      ctx.permissions.request(needed, { reason: "Subsonic Controls needs CORS access for your server, plus Generation and Chat Mutation to remember the song playing for each assistant reply." });
+      ctx.permissions.request(needed, { reason: "Subsonic Controls needs CORS access for your server, a panel and album-art theme support, plus Generation and Chat Mutation to remember the song playing for each assistant reply." });
     }
   });
   const permissionChange = ctx.events.on("SPINDLE_PERMISSION_CHANGED", (payload) => {

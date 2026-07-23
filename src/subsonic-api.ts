@@ -169,10 +169,14 @@ export async function getPlaybackState(userId?: string): Promise<PlaybackState |
   const own = entries.find((entry: any) => entry.username === config.username);
   if (!own) return null;
   // OpenSubsonic's playbackReport extension adds positionMs (milliseconds),
-  // state, and playbackRate to getNowPlaying entries. Navidrome supplies this
-  // field, so use it instead of resetting a synchronized lyric clock to zero.
-  const reportedPositionMs = Number(own.positionMs);
-  const positionKnown = Number.isFinite(reportedPositionMs) && reportedPositionMs >= 0;
+  // state, and playbackRate to getNowPlaying entries. Treat only an actually
+  // supplied value as canonical: Number(undefined) is 0, which used to turn a
+  // missing position into a false zero-second anchor for synchronized lyrics.
+  const rawPositionMs = own.positionMs;
+  const hasReportedPosition = (typeof rawPositionMs === "number" && Number.isFinite(rawPositionMs))
+    || (typeof rawPositionMs === "string" && rawPositionMs.trim() !== "" && Number.isFinite(Number(rawPositionMs)));
+  const reportedPositionMs = hasReportedPosition ? Number(rawPositionMs) : 0;
+  const positionKnown = hasReportedPosition && reportedPositionMs >= 0;
   const isPlaying = typeof own.state === "string" ? own.state.toLowerCase() === "playing" : true;
   return mapState(own, isPlaying, "now_playing", positionKnown ? reportedPositionMs : 0, userId, positionKnown);
 }

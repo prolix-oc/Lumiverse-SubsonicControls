@@ -1,12 +1,12 @@
 {
   "identifier": "subsonic_controls",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "name": "Subsonic Controls",
   "author": "Prolix OCs",
   "github": "",
   "homepage": "https://lumiverse.chat",
   "description": "Browse a Subsonic server or remotely control a Feishin desktop player.",
-  "permissions": ["cors_proxy", "ui_panels", "generation", "chat_mutation"],
+  "permissions": ["cors_proxy", "ui_panels", "app_manipulation", "generation", "chat_mutation"],
   "entry_backend": "dist/backend.js",
   "entry_frontend": "dist/frontend.js",
   "minimum_lumiverse_version": "1.0.0"

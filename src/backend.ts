@@ -16,6 +16,10 @@ const pollingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pollingUsers = new Set<string>();
 const stateByUser = new Map<string, PlaybackState | null>();
 const stateObservedAt = new Map<string, number>();
+// More than one caller can ask for state at once (the poller, initial UI
+// hydration, and an explicit refresh). An older request must never overwrite
+// the canonical position from a newer response after a track transition.
+const stateRequestSequences = new Map<string, number>();
 const lyricsRequestsByUser = new Map<string, LyricsRequestCoordinator<subsonic.LyricsData>>();
 const jukeboxUnavailableReasons = new Map<string, string>();
 const jukeboxAvailabilityChecked = new Set<string>();
@@ -156,7 +160,12 @@ function stopPolling(userId: string): void {
 }
 
 async function pushState(userId: string): Promise<PlaybackState | null> {
+  const requestSequence = (stateRequestSequences.get(userId) || 0) + 1;
+  stateRequestSequences.set(userId, requestSequence);
   const config = await loadConfig(userId);
+  if (stateRequestSequences.get(userId) !== requestSequence) {
+    return stateByUser.get(userId) || null;
+  }
   if (config?.remoteControl === "feishin") {
     const state = stateByUser.get(userId) || null;
     pushPlaybackMacros(state);
@@ -169,11 +178,17 @@ async function pushState(userId: string): Promise<PlaybackState | null> {
     return null;
   }
   const fetchedState = await subsonic.getPlaybackState(userId);
+  if (stateRequestSequences.get(userId) !== requestSequence) {
+    // A later request is already authoritative. Returning the cached state
+    // also keeps callers from rendering an out-of-order track transition.
+    return stateByUser.get(userId) || null;
+  }
   const previousState = stateByUser.get(userId);
   const previousObservedAt = stateObservedAt.get(userId) || Date.now();
   const now = Date.now();
-  // Classic Subsonic entries do not expose a position. Keep a monotonic local
-  // clock between polls rather than snapping lyrics back to 0 every second.
+  // A server-reported position is canonical, especially on a track change.
+  // Only classic entries with no position at all use the local monotonic
+  // clock, and never across track URIs.
   const state = fetchedState && !fetchedState.positionKnown && previousState
     && previousState.trackUri === fetchedState.trackUri && previousState.isPlaying && fetchedState.isPlaying
     ? { ...fetchedState, progressMs: Math.min(previousState.progressMs + Math.max(0, now - previousObservedAt), fetchedState.durationMs || Infinity) }
@@ -329,7 +344,11 @@ spindle.log.info("Subsonic Controls loaded");
 // ─── Per-swipe song snapshots ────────────────────────────────────────────
 
 const SONG_META_KEY = "subsonic_song";
-const pendingGenerationSongs = new Map<string, { snapshot: SongSnapshot; userId: string }>();
+const PENDING_GENERATION_MAX = 64;
+const pendingGenerationSongs = new Map<string, {
+  snapshot: Promise<SongSnapshot | null>;
+  userId: string;
+}>();
 
 type ChatMessage = {
   id?: string;
@@ -340,31 +359,46 @@ type ChatMessage = {
   metadata?: Record<string, unknown>;
 };
 
-function buildSongSnapshot(state: PlaybackState | null): SongSnapshot | null {
+function buildSongSnapshot(state: PlaybackState | null, capturedAt = Date.now()): SongSnapshot | null {
   if (!state?.trackUri || !state.trackName) return null;
-  return { trackName: state.trackName, artistName: state.artistName, albumName: state.albumName, albumArtUrl: state.albumArtUrl, trackUri: state.trackUri, isPlaying: state.isPlaying, capturedAt: Date.now() };
+  return { trackName: state.trackName, artistName: state.artistName, albumName: state.albumName, albumArtUrl: state.albumArtUrl, trackUri: state.trackUri, isPlaying: state.isPlaying, capturedAt };
 }
 
-async function snapshotForUser(userId: string): Promise<SongSnapshot | null> {
-  const cached = stateByUser.get(userId);
-  const state = cached || await subsonic.getPlaybackState(userId).catch(() => null);
-  return buildSongSnapshot(state);
+async function snapshotForUser(userId: string, capturedAt: number): Promise<SongSnapshot | null> {
+  // The polling/Feishin cache is both the fastest and the most accurate view
+  // of the instant generation began. Only fall back to the server when this
+  // extension has not observed a state for the user yet.
+  if (stateByUser.has(userId)) return buildSongSnapshot(stateByUser.get(userId) || null, capturedAt);
+  await loadUser(userId).catch(() => false);
+  return buildSongSnapshot(await subsonic.getPlaybackState(userId).catch(() => null), capturedAt);
 }
 
 function readSongMetadata(message: ChatMessage): Record<string, unknown> {
-  return { ...(message.metadata || message.extra?.spindle_metadata || {}) };
+  const metadata = message.metadata;
+  if (metadata && typeof metadata === "object") return { ...metadata };
+  const spindleMetadata = message.extra?.spindle_metadata;
+  return spindleMetadata && typeof spindleMetadata === "object" ? { ...spindleMetadata } : {};
 }
 
 function readSnapshots(message: ChatMessage): Record<number, SongSnapshot> {
   const node = readSongMetadata(message)[SONG_META_KEY] as { bySwipe?: Record<string, SongSnapshot> } | undefined;
-  if (!node?.bySwipe) return {};
-  return Object.fromEntries(Object.entries(node.bySwipe).filter(([swipeId, snapshot]) => Number.isInteger(Number(swipeId)) && !!snapshot).map(([swipeId, snapshot]) => [Number(swipeId), snapshot]));
+  if (!node?.bySwipe || typeof node.bySwipe !== "object") return {};
+  const snapshots: Record<number, SongSnapshot> = {};
+  for (const [swipeId, snapshot] of Object.entries(node.bySwipe)) {
+    const index = Number(swipeId);
+    if (Number.isInteger(index) && snapshot && typeof snapshot === "object") snapshots[index] = snapshot;
+  }
+  return snapshots;
+}
+
+function isAssistantMessage(message: ChatMessage): boolean {
+  return message.is_user === false && message.name !== "System";
 }
 
 async function persistSnapshot(chatId: string, messageId: string, swipeId: number, snapshot: SongSnapshot, userId: string): Promise<void> {
   const messages = await spindle.chat.getMessages(chatId) as unknown as ChatMessage[];
   const message = messages.find((candidate) => candidate.id === messageId);
-  if (!message || message.is_user || message.name === "System") return;
+  if (!message || !isAssistantMessage(message)) return;
   const targetSwipeId = message.swipe_id ?? swipeId;
   const metadata = readSongMetadata(message);
   metadata[SONG_META_KEY] = { bySwipe: { ...readSnapshots(message), [targetSwipeId]: snapshot } };
@@ -375,7 +409,7 @@ async function persistSnapshot(chatId: string, messageId: string, swipeId: numbe
 async function sendChatSongs(chatId: string, userId: string): Promise<void> {
   const messages = await spindle.chat.getMessages(chatId) as unknown as ChatMessage[];
   const entries: MessageSongEntry[] = messages.flatMap((message) => {
-    if (!message.id || message.is_user) return [];
+    if (!message.id || !isAssistantMessage(message)) return [];
     const bySwipe = readSnapshots(message);
     return Object.keys(bySwipe).length ? [{ messageId: message.id, activeSwipe: message.swipe_id || 0, bySwipe }] : [];
   });
@@ -383,17 +417,33 @@ async function sendChatSongs(chatId: string, userId: string): Promise<void> {
 }
 
 function onGenerationStarted(payload: unknown, userId?: string): void {
-  const generationId = (payload as { generationId?: string }).generationId;
-  if (!generationId || !userId) return;
-  void snapshotForUser(userId).then((snapshot) => { if (snapshot) pendingGenerationSongs.set(generationId, { snapshot, userId }); });
+  const generationId = (payload as { generationId?: string } | undefined)?.generationId;
+  const resolvedUserId = userId || activeUserId;
+  if (!generationId || !resolvedUserId) return;
+
+  // Store the promise immediately. The previous port inserted an entry only
+  // after its async fallback lookup completed, so a quick reply could end
+  // before there was anything to persist.
+  if (pendingGenerationSongs.size >= PENDING_GENERATION_MAX) {
+    const oldestGenerationId = pendingGenerationSongs.keys().next().value;
+    if (oldestGenerationId) pendingGenerationSongs.delete(oldestGenerationId);
+  }
+  pendingGenerationSongs.set(generationId, {
+    snapshot: snapshotForUser(resolvedUserId, Date.now()),
+    userId: resolvedUserId,
+  });
 }
 
-function onGenerationEnded(payload: unknown): void {
-  const event = payload as { generationId?: string; chatId?: string; messageId?: string; error?: string };
-  const pending = event.generationId ? pendingGenerationSongs.get(event.generationId) : null;
-  if (event.generationId) pendingGenerationSongs.delete(event.generationId);
-  if (!pending || event.error || !event.chatId || !event.messageId) return;
-  void persistSnapshot(event.chatId, event.messageId, 0, pending.snapshot, pending.userId).catch((error) => spindle.log.warn(`Song snapshot failed: ${error?.message || error}`));
+async function onGenerationEnded(payload: unknown): Promise<void> {
+  const event = payload as { generationId?: string; chatId?: string; messageId?: string; error?: string } | undefined;
+  const generationId = event?.generationId;
+  const pending = generationId ? pendingGenerationSongs.get(generationId) : null;
+  if (generationId) pendingGenerationSongs.delete(generationId);
+  if (!pending || event?.error || !event?.chatId || !event.messageId) return;
+
+  const snapshot = await pending.snapshot.catch(() => null);
+  if (!snapshot) return;
+  await persistSnapshot(event.chatId, event.messageId, 0, snapshot, pending.userId);
 }
 
 let generationUnsubscribers: Array<() => void> = [];
@@ -402,7 +452,9 @@ function setupGenerationCapture(): void {
   generationUnsubscribers = [];
   try {
     generationUnsubscribers.push(spindle.on("GENERATION_STARTED", onGenerationStarted));
-    generationUnsubscribers.push(spindle.on("GENERATION_ENDED", onGenerationEnded));
+    generationUnsubscribers.push(spindle.on("GENERATION_ENDED", (payload) => {
+      void onGenerationEnded(payload).catch((error) => spindle.log.warn(`Song snapshot failed: ${error?.message || error}`));
+    }));
   } catch (error: any) {
     spindle.log.warn(`Song snapshot subscription failed: ${error?.message || error}`);
   }
@@ -410,6 +462,39 @@ function setupGenerationCapture(): void {
 setupGenerationCapture();
 spindle.permissions.onChanged(({ permission, granted }) => {
   if (permission === "generation" && granted) setupGenerationCapture();
+});
+
+// Swipes are indexed. When a swipe is deleted, reindex the persisted snapshots
+// so the badge continues to describe the version the user is looking at.
+spindle.on("MESSAGE_SWIPED", (payload, userId) => {
+  const event = payload as {
+    action?: string;
+    chatId?: string;
+    message?: ChatMessage;
+    swipeId?: number;
+  } | undefined;
+  const message = event?.message;
+  const resolvedUserId = userId || activeUserId;
+  if (event?.action !== "deleted" || !event.chatId || !message?.id || !isAssistantMessage(message)
+    || !Number.isInteger(event.swipeId) || !resolvedUserId) return;
+  const chatId = event.chatId;
+  const swipeId = event.swipeId as number;
+  const messageId = message.id;
+
+  void (async () => {
+    const metadata = readSongMetadata(message);
+    const snapshots = readSnapshots(message);
+    if (!Object.keys(snapshots).length) return;
+    const realigned: Record<number, SongSnapshot> = {};
+    for (const [index, snapshot] of Object.entries(snapshots)) {
+      const numericIndex = Number(index);
+      if (numericIndex === swipeId) continue;
+      realigned[numericIndex > swipeId ? numericIndex - 1 : numericIndex] = snapshot;
+    }
+    metadata[SONG_META_KEY] = { bySwipe: realigned };
+    await spindle.chat.updateMessage(chatId, messageId, { metadata, skipChunkRebuild: true });
+    await sendChatSongs(chatId, resolvedUserId);
+  })().catch((error) => spindle.log.warn(`Song snapshot realignment failed: ${error?.message || error}`));
 });
 
 // ─── Macros ──────────────────────────────────────────────────────────────

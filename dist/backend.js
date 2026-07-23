@@ -159,8 +159,10 @@ async function getPlaybackState(userId) {
   const own = entries.find((entry) => entry.username === config.username);
   if (!own)
     return null;
-  const reportedPositionMs = Number(own.positionMs);
-  const positionKnown = Number.isFinite(reportedPositionMs) && reportedPositionMs >= 0;
+  const rawPositionMs = own.positionMs;
+  const hasReportedPosition = typeof rawPositionMs === "number" && Number.isFinite(rawPositionMs) || typeof rawPositionMs === "string" && rawPositionMs.trim() !== "" && Number.isFinite(Number(rawPositionMs));
+  const reportedPositionMs = hasReportedPosition ? Number(rawPositionMs) : 0;
+  const positionKnown = hasReportedPosition && reportedPositionMs >= 0;
   const isPlaying = typeof own.state === "string" ? own.state.toLowerCase() === "playing" : true;
   return mapState(own, isPlaying, "now_playing", positionKnown ? reportedPositionMs : 0, userId, positionKnown);
 }
@@ -497,6 +499,7 @@ var pollingTimers = new Map;
 var pollingUsers = new Set;
 var stateByUser = new Map;
 var stateObservedAt = new Map;
+var stateRequestSequences = new Map;
 var lyricsRequestsByUser = new Map;
 var jukeboxUnavailableReasons = new Map;
 var jukeboxAvailabilityChecked = new Set;
@@ -623,7 +626,12 @@ function stopPolling(userId) {
   pollingUsers.delete(userId);
 }
 async function pushState(userId) {
+  const requestSequence = (stateRequestSequences.get(userId) || 0) + 1;
+  stateRequestSequences.set(userId, requestSequence);
   const config = await loadConfig(userId);
+  if (stateRequestSequences.get(userId) !== requestSequence) {
+    return stateByUser.get(userId) || null;
+  }
   if (config?.remoteControl === "feishin") {
     const state2 = stateByUser.get(userId) || null;
     pushPlaybackMacros(state2);
@@ -636,6 +644,9 @@ async function pushState(userId) {
     return null;
   }
   const fetchedState = await getPlaybackState(userId);
+  if (stateRequestSequences.get(userId) !== requestSequence) {
+    return stateByUser.get(userId) || null;
+  }
   const previousState = stateByUser.get(userId);
   const previousObservedAt = stateObservedAt.get(userId) || Date.now();
   const now = Date.now();
@@ -806,30 +817,45 @@ spindle.onFrontendMessage(async (raw, userId) => {
 });
 spindle.log.info("Subsonic Controls loaded");
 var SONG_META_KEY = "subsonic_song";
+var PENDING_GENERATION_MAX = 64;
 var pendingGenerationSongs = new Map;
-function buildSongSnapshot(state) {
+function buildSongSnapshot(state, capturedAt = Date.now()) {
   if (!state?.trackUri || !state.trackName)
     return null;
-  return { trackName: state.trackName, artistName: state.artistName, albumName: state.albumName, albumArtUrl: state.albumArtUrl, trackUri: state.trackUri, isPlaying: state.isPlaying, capturedAt: Date.now() };
+  return { trackName: state.trackName, artistName: state.artistName, albumName: state.albumName, albumArtUrl: state.albumArtUrl, trackUri: state.trackUri, isPlaying: state.isPlaying, capturedAt };
 }
-async function snapshotForUser(userId) {
-  const cached = stateByUser.get(userId);
-  const state = cached || await getPlaybackState(userId).catch(() => null);
-  return buildSongSnapshot(state);
+async function snapshotForUser(userId, capturedAt) {
+  if (stateByUser.has(userId))
+    return buildSongSnapshot(stateByUser.get(userId) || null, capturedAt);
+  await loadUser(userId).catch(() => false);
+  return buildSongSnapshot(await getPlaybackState(userId).catch(() => null), capturedAt);
 }
 function readSongMetadata(message) {
-  return { ...message.metadata || message.extra?.spindle_metadata || {} };
+  const metadata = message.metadata;
+  if (metadata && typeof metadata === "object")
+    return { ...metadata };
+  const spindleMetadata = message.extra?.spindle_metadata;
+  return spindleMetadata && typeof spindleMetadata === "object" ? { ...spindleMetadata } : {};
 }
 function readSnapshots(message) {
   const node = readSongMetadata(message)[SONG_META_KEY];
-  if (!node?.bySwipe)
+  if (!node?.bySwipe || typeof node.bySwipe !== "object")
     return {};
-  return Object.fromEntries(Object.entries(node.bySwipe).filter(([swipeId, snapshot]) => Number.isInteger(Number(swipeId)) && !!snapshot).map(([swipeId, snapshot]) => [Number(swipeId), snapshot]));
+  const snapshots = {};
+  for (const [swipeId, snapshot] of Object.entries(node.bySwipe)) {
+    const index = Number(swipeId);
+    if (Number.isInteger(index) && snapshot && typeof snapshot === "object")
+      snapshots[index] = snapshot;
+  }
+  return snapshots;
+}
+function isAssistantMessage(message) {
+  return message.is_user === false && message.name !== "System";
 }
 async function persistSnapshot(chatId, messageId, swipeId, snapshot, userId) {
   const messages = await spindle.chat.getMessages(chatId);
   const message = messages.find((candidate) => candidate.id === messageId);
-  if (!message || message.is_user || message.name === "System")
+  if (!message || !isAssistantMessage(message))
     return;
   const targetSwipeId = message.swipe_id ?? swipeId;
   const metadata = readSongMetadata(message);
@@ -840,7 +866,7 @@ async function persistSnapshot(chatId, messageId, swipeId, snapshot, userId) {
 async function sendChatSongs(chatId, userId) {
   const messages = await spindle.chat.getMessages(chatId);
   const entries = messages.flatMap((message) => {
-    if (!message.id || message.is_user)
+    if (!message.id || !isAssistantMessage(message))
       return [];
     const bySwipe = readSnapshots(message);
     return Object.keys(bySwipe).length ? [{ messageId: message.id, activeSwipe: message.swipe_id || 0, bySwipe }] : [];
@@ -848,22 +874,32 @@ async function sendChatSongs(chatId, userId) {
   send({ type: "chat_songs", chatId, entries }, userId);
 }
 function onGenerationStarted(payload, userId) {
-  const generationId = payload.generationId;
-  if (!generationId || !userId)
+  const generationId = payload?.generationId;
+  const resolvedUserId = userId || activeUserId2;
+  if (!generationId || !resolvedUserId)
     return;
-  snapshotForUser(userId).then((snapshot) => {
-    if (snapshot)
-      pendingGenerationSongs.set(generationId, { snapshot, userId });
+  if (pendingGenerationSongs.size >= PENDING_GENERATION_MAX) {
+    const oldestGenerationId = pendingGenerationSongs.keys().next().value;
+    if (oldestGenerationId)
+      pendingGenerationSongs.delete(oldestGenerationId);
+  }
+  pendingGenerationSongs.set(generationId, {
+    snapshot: snapshotForUser(resolvedUserId, Date.now()),
+    userId: resolvedUserId
   });
 }
-function onGenerationEnded(payload) {
+async function onGenerationEnded(payload) {
   const event = payload;
-  const pending = event.generationId ? pendingGenerationSongs.get(event.generationId) : null;
-  if (event.generationId)
-    pendingGenerationSongs.delete(event.generationId);
-  if (!pending || event.error || !event.chatId || !event.messageId)
+  const generationId = event?.generationId;
+  const pending = generationId ? pendingGenerationSongs.get(generationId) : null;
+  if (generationId)
+    pendingGenerationSongs.delete(generationId);
+  if (!pending || event?.error || !event?.chatId || !event.messageId)
     return;
-  persistSnapshot(event.chatId, event.messageId, 0, pending.snapshot, pending.userId).catch((error) => spindle.log.warn(`Song snapshot failed: ${error?.message || error}`));
+  const snapshot = await pending.snapshot.catch(() => null);
+  if (!snapshot)
+    return;
+  await persistSnapshot(event.chatId, event.messageId, 0, snapshot, pending.userId);
 }
 var generationUnsubscribers = [];
 function setupGenerationCapture() {
@@ -872,7 +908,9 @@ function setupGenerationCapture() {
   generationUnsubscribers = [];
   try {
     generationUnsubscribers.push(spindle.on("GENERATION_STARTED", onGenerationStarted));
-    generationUnsubscribers.push(spindle.on("GENERATION_ENDED", onGenerationEnded));
+    generationUnsubscribers.push(spindle.on("GENERATION_ENDED", (payload) => {
+      onGenerationEnded(payload).catch((error) => spindle.log.warn(`Song snapshot failed: ${error?.message || error}`));
+    }));
   } catch (error) {
     spindle.log.warn(`Song snapshot subscription failed: ${error?.message || error}`);
   }
@@ -881,6 +919,32 @@ setupGenerationCapture();
 spindle.permissions.onChanged(({ permission, granted }) => {
   if (permission === "generation" && granted)
     setupGenerationCapture();
+});
+spindle.on("MESSAGE_SWIPED", (payload, userId) => {
+  const event = payload;
+  const message = event?.message;
+  const resolvedUserId = userId || activeUserId2;
+  if (event?.action !== "deleted" || !event.chatId || !message?.id || !isAssistantMessage(message) || !Number.isInteger(event.swipeId) || !resolvedUserId)
+    return;
+  const chatId = event.chatId;
+  const swipeId = event.swipeId;
+  const messageId = message.id;
+  (async () => {
+    const metadata = readSongMetadata(message);
+    const snapshots = readSnapshots(message);
+    if (!Object.keys(snapshots).length)
+      return;
+    const realigned = {};
+    for (const [index, snapshot] of Object.entries(snapshots)) {
+      const numericIndex = Number(index);
+      if (numericIndex === swipeId)
+        continue;
+      realigned[numericIndex > swipeId ? numericIndex - 1 : numericIndex] = snapshot;
+    }
+    metadata[SONG_META_KEY] = { bySwipe: realigned };
+    await spindle.chat.updateMessage(chatId, messageId, { metadata, skipChunkRebuild: true });
+    await sendChatSongs(chatId, resolvedUserId);
+  })().catch((error) => spindle.log.warn(`Song snapshot realignment failed: ${error?.message || error}`));
 });
 async function getMacroPlaybackState() {
   const userId = activeUserId2;
