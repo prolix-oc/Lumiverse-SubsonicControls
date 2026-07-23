@@ -7,6 +7,7 @@ type StoredConfig = Omit<SubsonicConfig, "password">;
 const POLL_PLAYING_MS = 1_000;
 const POLL_IDLE_MS = 1_000;
 const pollingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pollingUsers = new Set<string>();
 const stateByUser = new Map<string, PlaybackState | null>();
 const stateObservedAt = new Map<string, number>();
 const jukeboxUnavailableReasons = new Map<string, string>();
@@ -64,6 +65,7 @@ function stopPolling(userId: string): void {
   const timer = pollingTimers.get(userId);
   if (timer) clearTimeout(timer);
   pollingTimers.delete(userId);
+  pollingUsers.delete(userId);
 }
 
 async function pushState(userId: string): Promise<PlaybackState | null> {
@@ -90,14 +92,20 @@ async function pushState(userId: string): Promise<PlaybackState | null> {
 }
 
 function startPolling(userId: string): void {
-  stopPolling(userId);
+  // A saved connection is restored by get_state rather than the Connect
+  // action. Keep exactly one loop per user so restored sessions continue to
+  // receive track changes instead of showing only their initial snapshot.
+  if (pollingUsers.has(userId)) return;
+  pollingUsers.add(userId);
   const poll = async () => {
     try {
       const state = await pushState(userId);
+      if (!pollingUsers.has(userId)) return;
       const delay = state?.isPlaying ? POLL_PLAYING_MS : POLL_IDLE_MS;
       pollingTimers.set(userId, setTimeout(poll, delay));
     } catch (error: any) {
       spindle.log.warn(`Subsonic polling failed: ${error?.message || error}`);
+      if (!pollingUsers.has(userId)) return;
       pollingTimers.set(userId, setTimeout(poll, POLL_IDLE_MS));
     }
   };
@@ -123,7 +131,10 @@ spindle.onFrontendMessage(async (raw, userId) => {
     await loadUser(userId);
     switch (message.type) {
       case "get_config": await sendConfig(userId); break;
-      case "get_state": await pushState(userId); break;
+      case "get_state":
+        await pushState(userId);
+        startPolling(userId);
+        break;
       case "connect": {
         const config: SubsonicConfig = { serverUrl: message.serverUrl, username: message.username, password: message.password, enableJukebox: message.enableJukebox };
         subsonic.setConfig(userId, config);

@@ -243,6 +243,7 @@ async function getLyrics(trackId, userId) {
 var POLL_PLAYING_MS = 1000;
 var POLL_IDLE_MS = 1000;
 var pollingTimers = new Map;
+var pollingUsers = new Set;
 var stateByUser = new Map;
 var stateObservedAt = new Map;
 var jukeboxUnavailableReasons = new Map;
@@ -297,6 +298,7 @@ function stopPolling(userId) {
   if (timer)
     clearTimeout(timer);
   pollingTimers.delete(userId);
+  pollingUsers.delete(userId);
 }
 async function pushState(userId) {
   if (!isConnected(userId)) {
@@ -316,14 +318,20 @@ async function pushState(userId) {
   return state;
 }
 function startPolling(userId) {
-  stopPolling(userId);
+  if (pollingUsers.has(userId))
+    return;
+  pollingUsers.add(userId);
   const poll = async () => {
     try {
       const state = await pushState(userId);
+      if (!pollingUsers.has(userId))
+        return;
       const delay = state?.isPlaying ? POLL_PLAYING_MS : POLL_IDLE_MS;
       pollingTimers.set(userId, setTimeout(poll, delay));
     } catch (error) {
       spindle.log.warn(`Subsonic polling failed: ${error?.message || error}`);
+      if (!pollingUsers.has(userId))
+        return;
       pollingTimers.set(userId, setTimeout(poll, POLL_IDLE_MS));
     }
   };
@@ -350,6 +358,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         break;
       case "get_state":
         await pushState(userId);
+        startPolling(userId);
         break;
       case "connect": {
         const config = { serverUrl: message.serverUrl, username: message.username, password: message.password, enableJukebox: message.enableJukebox };

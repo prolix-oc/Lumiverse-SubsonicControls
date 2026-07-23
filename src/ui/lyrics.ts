@@ -10,7 +10,7 @@ export interface LyricsUI {
   root: HTMLElement;
   update(trackUri: string | null, plainLyrics: string | null, syncedLyrics: string | null, instrumental: boolean): void;
   updatePlayback(state: PlaybackState | null): void;
-  setLoading(loading: boolean): void;
+  setLoading(loading: boolean, playbackState?: PlaybackState | null): void;
   setAutoScrollSuspended(suspended: boolean): void;
   clear(): void;
   destroy(): void;
@@ -135,14 +135,31 @@ export function createLyricsUI(): LyricsUI {
     playback = null;
     activeLineIndex = -1;
   }
-  function setLoading(loading: boolean) {
+  function setLoading(loading: boolean, playbackState?: PlaybackState | null) {
     stopLoadingState();
     if (!loading) return;
     stopTicking(); stopAutoScrollTracking();
     body.innerHTML = "";
     body.className = "spotify-lyrics-body spotify-lyrics-loading";
+    // Keep the same playback epoch as the floating player while the lyric
+    // request is in flight. Clearing the complete model here used to make the
+    // drawer recreate its clock from an older server position on response.
+    currentTrackUri = playbackState?.trackUri ?? currentTrackUri;
     syncedLines = [];
-    syncedLyricsModel.clear();
+    syncedLyricsModel.setLyrics([]);
+    if (playbackState && playbackState.trackUri === currentTrackUri) {
+      playback = {
+        trackUri: playbackState.trackUri,
+        progressMs: playbackState.progressMs,
+        durationMs: playbackState.durationMs,
+        isPlaying: playbackState.isPlaying,
+        updatedAt: Date.now(),
+      };
+      syncedLyricsModel.setPlayback(playback);
+    } else {
+      playback = null;
+      syncedLyricsModel.setPlayback(null);
+    }
     activeLineIndex = -1;
     loadingTimer = setTimeout(() => {
       if (!body.classList.contains("spotify-lyrics-loading")) return;

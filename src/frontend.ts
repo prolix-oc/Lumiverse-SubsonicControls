@@ -574,7 +574,7 @@ export function setup(ctx: SpindleFrontendContext) {
         lyrics.updatePlayback(currentState);
         if (currentState?.trackUri && currentState.trackUri !== lyricsTrackId) {
           lyricsTrackId = currentState.trackUri;
-          lyrics.setLoading(true);
+          lyrics.setLoading(true, currentState);
           miniPlayer.setLyricsLoading(true);
           modernWidget.setLyricsLoading(true);
           send({ type: "get_lyrics" });

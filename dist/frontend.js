@@ -2827,7 +2827,7 @@ function createLyricsUI() {
     playback = null;
     activeLineIndex = -1;
   }
-  function setLoading(loading) {
+  function setLoading(loading, playbackState) {
     stopLoadingState();
     if (!loading)
       return;
@@ -2835,8 +2835,22 @@ function createLyricsUI() {
     stopAutoScrollTracking();
     body.innerHTML = "";
     body.className = "spotify-lyrics-body spotify-lyrics-loading";
+    currentTrackUri = playbackState?.trackUri ?? currentTrackUri;
     syncedLines = [];
-    syncedLyricsModel.clear();
+    syncedLyricsModel.setLyrics([]);
+    if (playbackState && playbackState.trackUri === currentTrackUri) {
+      playback = {
+        trackUri: playbackState.trackUri,
+        progressMs: playbackState.progressMs,
+        durationMs: playbackState.durationMs,
+        isPlaying: playbackState.isPlaying,
+        updatedAt: Date.now()
+      };
+      syncedLyricsModel.setPlayback(playback);
+    } else {
+      playback = null;
+      syncedLyricsModel.setPlayback(null);
+    }
     activeLineIndex = -1;
     loadingTimer = setTimeout(() => {
       if (!body.classList.contains("spotify-lyrics-loading"))
@@ -5310,7 +5324,7 @@ function setup(ctx) {
         lyrics.updatePlayback(currentState);
         if (currentState?.trackUri && currentState.trackUri !== lyricsTrackId) {
           lyricsTrackId = currentState.trackUri;
-          lyrics.setLoading(true);
+          lyrics.setLoading(true, currentState);
           miniPlayer.setLyricsLoading(true);
           modernWidget.setLyricsLoading(true);
           send({ type: "get_lyrics" });
