@@ -5,6 +5,7 @@ export interface LyricsUI {
   update(trackId: string | null, plainLyrics: string | null, syncedLyrics: string | null, instrumental: boolean): void;
   updatePlayback(state: PlaybackState | null): void;
   setLoading(loading: boolean): void;
+  setAutoScrollSuspended(suspended: boolean): void;
   clear(): void;
   destroy(): void;
 }
@@ -15,6 +16,10 @@ export function createLyricsUI(): LyricsUI {
   const body = document.createElement("div"); body.className = "spotify-lyrics-body";
   root.append(title, body);
   const show = (text: string, className = "") => { body.className = `spotify-lyrics-body ${className}`.trim(); body.textContent = text; };
+  // Kept in step with the richer Spotify lyrics implementation. This compact
+  // Subsonic view does not auto-scroll yet, but the widget menu can use the
+  // same lifecycle without treating the two extensions differently.
+  let autoScrollSuspended = false;
   return {
     root,
     update(_trackId, plainLyrics, syncedLyrics, instrumental) {
@@ -24,6 +29,7 @@ export function createLyricsUI(): LyricsUI {
     },
     updatePlayback(_state) {},
     setLoading(loading) { if (loading) show("Loading lyrics…", "spotify-lyrics-status-loading"); },
+    setAutoScrollSuspended(suspended) { autoScrollSuspended = suspended; },
     clear() { show(""); },
     destroy() { root.remove(); },
   };

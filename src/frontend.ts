@@ -68,17 +68,55 @@ export function setup(ctx: SpindleFrontendContext) {
   let currentState: PlaybackState | null = null;
   let lyricsTrackId: string | null = null;
   let jukeboxEnabled = false;
+  type ArtShape = "circle" | "squircle";
+  type SizeMode = "small" | "medium" | "large" | "custom";
+  const DEFAULT_SIZE_PRESETS: Record<Exclude<SizeMode, "custom">, number> = { small: 36, medium: 48, large: 64 };
+  const MODERN_SIZE_PRESETS: Record<Exclude<SizeMode, "custom">, number> = { small: 112, medium: 128, large: 144 };
+  const DEFAULT_WIDGET_SIZE_MIN = 24;
+  const DEFAULT_WIDGET_SIZE_MAX = 128;
+  const MODERN_WIDGET_SIZE_MIN = 112;
+  const MODERN_WIDGET_SIZE_MAX = 192;
+
+  function getSizePresets(style: MiniPlayerStyle): Record<Exclude<SizeMode, "custom">, number> {
+    return style === "modern" ? MODERN_SIZE_PRESETS : DEFAULT_SIZE_PRESETS;
+  }
+
+  function getSizeBounds(style: MiniPlayerStyle) {
+    return style === "modern"
+      ? { min: MODERN_WIDGET_SIZE_MIN, max: MODERN_WIDGET_SIZE_MAX }
+      : { min: DEFAULT_WIDGET_SIZE_MIN, max: DEFAULT_WIDGET_SIZE_MAX };
+  }
+
+  function clampWidgetSize(size: number, style: MiniPlayerStyle): number {
+    const { min, max } = getSizeBounds(style);
+    return Math.max(min, Math.min(size, max));
+  }
+
+  function isSizeMode(value: unknown): value is SizeMode {
+    return value === "small" || value === "medium" || value === "large" || value === "custom";
+  }
+
+  function inferSizeMode(size: number, style: MiniPlayerStyle): SizeMode {
+    const presets = getSizePresets(style);
+    if (size === presets.small) return "small";
+    if (size === presets.large) return "large";
+    return size === presets.medium ? "medium" : "custom";
+  }
+
   let currentWidgetSize = 48;
-  let currentArtShape: "circle" | "squircle" = "circle";
+  let currentArtShape: ArtShape = "circle";
+  let currentSizeMode: SizeMode = "medium";
   let currentMiniPlayerStyle: MiniPlayerStyle = "default";
   let savedWidgetPosition: { x: number; y: number } | undefined;
   try {
     const stored = JSON.parse(localStorage.getItem(WIDGET_PREFS_KEY) || "null") as {
-      size?: unknown; shape?: unknown; miniPlayerStyle?: unknown; x?: unknown; y?: unknown;
+      size?: unknown; shape?: unknown; sizeMode?: unknown; miniPlayerStyle?: unknown; x?: unknown; y?: unknown;
     } | null;
-    if (typeof stored?.size === "number") currentWidgetSize = Math.max(24, Math.min(192, stored.size));
-    if (stored?.shape === "squircle") currentArtShape = "squircle";
     if (stored?.miniPlayerStyle === "modern") currentMiniPlayerStyle = "modern";
+    if (typeof stored?.size === "number") currentWidgetSize = clampWidgetSize(stored.size, currentMiniPlayerStyle);
+    if (stored?.shape === "squircle") currentArtShape = "squircle";
+    currentSizeMode = isSizeMode(stored?.sizeMode) ? stored.sizeMode : inferSizeMode(currentWidgetSize, currentMiniPlayerStyle);
+    if (currentSizeMode !== "custom") currentWidgetSize = getSizePresets(currentMiniPlayerStyle)[currentSizeMode];
     if (typeof stored?.x === "number" && typeof stored.y === "number") {
       savedWidgetPosition = { x: stored.x, y: stored.y };
     }
@@ -89,9 +127,65 @@ export function setup(ctx: SpindleFrontendContext) {
   function saveWidgetPrefs() {
     const position = lastKnownPosition ?? widget.getPosition();
     localStorage.setItem(WIDGET_PREFS_KEY, JSON.stringify({
-      size: currentWidgetSize, shape: currentArtShape, miniPlayerStyle: currentMiniPlayerStyle, x: position.x, y: position.y,
+      size: currentWidgetSize, shape: currentArtShape, sizeMode: currentSizeMode, miniPlayerStyle: currentMiniPlayerStyle, x: position.x, y: position.y,
     }));
   }
+
+  let widgetSizeLabelTitle: HTMLSpanElement | null = null;
+  let widgetSizeHint: HTMLDivElement | null = null;
+  let widgetSizeInputRef: HTMLInputElement | null = null;
+  function updateWidgetCustomizationUI() {
+    const { min, max } = getSizeBounds(currentMiniPlayerStyle);
+    if (widgetSizeLabelTitle) {
+      widgetSizeLabelTitle.textContent = currentMiniPlayerStyle === "modern"
+        ? "Collapsed Modern Player Size (px)"
+        : "Custom Widget Size (px)";
+    }
+    if (widgetSizeHint) {
+      widgetSizeHint.textContent = currentMiniPlayerStyle === "modern"
+        ? "Controls the compact size of the modern player before it expands."
+        : "Controls the floating widget size.";
+    }
+    if (widgetSizeInputRef) {
+      widgetSizeInputRef.min = String(min);
+      widgetSizeInputRef.max = String(max);
+      widgetSizeInputRef.placeholder = currentMiniPlayerStyle === "modern" ? "e.g. 128" : "e.g. 56";
+      widgetSizeInputRef.value = currentSizeMode === "custom" ? String(currentWidgetSize) : "";
+    }
+  }
+
+  const settingsBody = settings.root.querySelector(".spotify-settings-card-body");
+  if (settingsBody) {
+    const divider = document.createElement("div");
+    divider.style.cssText = "height:1px;background:var(--lumiverse-border);margin:4px 0";
+    const label = document.createElement("label");
+    label.className = "spotify-settings-label";
+    widgetSizeLabelTitle = document.createElement("span");
+    widgetSizeHint = document.createElement("div");
+    widgetSizeHint.style.cssText = "font-size:0.8em;opacity:0.6;margin-top:2px";
+    const row = document.createElement("div");
+    row.className = "spotify-settings-row";
+    const input = document.createElement("input");
+    input.className = "spotify-input";
+    input.type = "number";
+    input.style.width = "80px";
+    widgetSizeInputRef = input;
+    const apply = document.createElement("button");
+    apply.className = "spotify-btn spotify-btn-primary";
+    apply.textContent = "Apply";
+    apply.style.cssText = "font-size:0.85em;padding:4px 12px";
+    apply.addEventListener("click", () => {
+      const value = Number.parseInt(input.value, 10);
+      const { min, max } = getSizeBounds(currentMiniPlayerStyle);
+      if (Number.isNaN(value) || value < min || value > max) return;
+      currentSizeMode = "custom";
+      recreateWidgetWithSize(value);
+    });
+    row.append(input, apply);
+    label.append(widgetSizeLabelTitle, row, widgetSizeHint);
+    settingsBody.append(divider, label);
+  }
+  updateWidgetCustomizationUI();
 
   const widgetContent = document.createElement("div");
   widgetContent.className = "spotify-float-widget";
@@ -110,6 +204,8 @@ export function setup(ctx: SpindleFrontendContext) {
   widgetContent.appendChild(legacyVisual);
 
   let modernWidgetExpanded = false;
+  const WIDGET_SIZE_TRANSITION_MS = 420;
+  let widgetSizeRequestTimer: ReturnType<typeof setTimeout> | null = null;
   const modernWidget = createModernWidgetPlayerUI(send, () => tab.activate(), () => setModernWidgetExpanded(false));
   widgetContent.appendChild(modernWidget.root);
   const miniPlayer = createMiniPlayerUI(send, () => tab.activate(), () => {
@@ -118,16 +214,26 @@ export function setup(ctx: SpindleFrontendContext) {
   });
   miniPlayer.setStyle("default");
 
-  function getWidgetSize(expanded = modernWidgetExpanded) {
-    if (currentMiniPlayerStyle === "modern" && expanded) {
-      return currentState
-        ? { width: Math.max(320, Math.min(368, window.innerWidth - 24)), height: Math.max(500, Math.min(600, window.innerHeight - 24)) }
-        : { width: Math.max(280, Math.min(320, window.innerWidth - 24)), height: 196 };
+  function getModernExpandedSize() {
+    if (!currentState) {
+      return { width: Math.max(280, Math.min(320, window.innerWidth - 24)), height: 196 };
+    }
+    // A freshly opened desktop pop-out can still report the compact viewport.
+    // Preserve the expanded baseline so the lyrics player has room to animate.
+    return {
+      width: Math.max(320, Math.min(368, window.innerWidth - 24)),
+      height: Math.max(500, Math.min(600, window.innerHeight - 24)),
+    };
+  }
+
+  function getWidgetLayoutSize(expanded = modernWidgetExpanded) {
+    if (currentMiniPlayerStyle === "modern") {
+      return expanded ? getModernExpandedSize() : { width: currentWidgetSize, height: currentWidgetSize };
     }
     return { width: currentWidgetSize, height: currentWidgetSize };
   }
 
-  function clampWidgetPosition(size = getWidgetSize()) {
+  function clampWidgetPosition(size = getWidgetLayoutSize()) {
     const position = widget.getPosition();
     const maxX = Math.max(WIDGET_EDGE_PAD, window.innerWidth - size.width - WIDGET_EDGE_PAD);
     const maxY = Math.max(WIDGET_EDGE_PAD, window.innerHeight - size.height - WIDGET_EDGE_PAD);
@@ -136,37 +242,68 @@ export function setup(ctx: SpindleFrontendContext) {
     if (x !== position.x || y !== position.y) widget.moveTo(x, y);
   }
 
-  function applyWidgetStyle() {
-    const size = getWidgetSize();
-    widget.root.style.touchAction = currentMiniPlayerStyle === "modern" && modernWidgetExpanded ? "pan-y" : "none";
-    widget.root.style.width = `${size.width}px`;
-    widget.root.style.height = `${size.height}px`;
-    widgetContent.style.width = `${size.width}px`;
-    widgetContent.style.height = `${size.height}px`;
-    widgetContent.style.borderRadius = currentMiniPlayerStyle === "modern" && modernWidgetExpanded ? "30px" : currentArtShape === "circle" ? "50%" : "22%";
+  function requestWidgetSize(size: { width: number; height: number }, delay = false) {
+    if (widgetSizeRequestTimer) clearTimeout(widgetSizeRequestTimer);
+    const commit = () => {
+      widgetSizeRequestTimer = null;
+      widget.setSize(size.width, size.height);
+    };
+    if (delay) widgetSizeRequestTimer = setTimeout(commit, WIDGET_SIZE_TRANSITION_MS);
+    else commit();
+  }
+
+  function applyWidgetStyle({ delaySizeRequest = false }: { delaySizeRequest?: boolean } = {}) {
+    const size = getWidgetLayoutSize();
+    const touchAction = currentMiniPlayerStyle === "modern" && modernWidgetExpanded ? "pan-y" : "none";
+    widget.root.style.touchAction = touchAction;
+    widget.root.style.transition = "width 420ms cubic-bezier(0.22, 1, 0.36, 1), height 420ms cubic-bezier(0.22, 1, 0.36, 1)";
+    widgetContent.style.transition = "width 420ms cubic-bezier(0.22, 1, 0.36, 1), height 420ms cubic-bezier(0.22, 1, 0.36, 1), border-radius 420ms cubic-bezier(0.22, 1, 0.36, 1)";
+    widgetContent.style.touchAction = touchAction;
     modernWidget.setCollapsedSize(currentWidgetSize);
     if (currentMiniPlayerStyle === "modern") {
       widgetContent.classList.add("spotify-float-widget-modern-mode");
       legacyVisual.style.display = "none";
       modernWidget.root.style.display = "block";
+      widget.root.style.width = `${size.width}px`;
+      widget.root.style.height = `${size.height}px`;
+      widgetContent.style.width = `${size.width}px`;
+      widgetContent.style.height = `${size.height}px`;
+      widgetContent.style.borderRadius = modernWidgetExpanded ? "30px" : `${Math.max(18, Math.round(currentWidgetSize * 0.28))}px`;
+      // On collapse, let the visual transition finish before committing the
+      // compact host bounds; otherwise the native window cuts it off early.
+      requestWidgetSize(size, delaySizeRequest);
     } else {
       widgetContent.classList.remove("spotify-float-widget-modern-mode");
       legacyVisual.style.display = "flex";
       modernWidget.root.style.display = "none";
+      const radius = currentArtShape === "circle" ? "50%" : "22%";
+      widget.root.style.width = `${currentWidgetSize}px`;
+      widget.root.style.height = `${currentWidgetSize}px`;
+      widgetContent.style.width = `${currentWidgetSize}px`;
+      widgetContent.style.height = `${currentWidgetSize}px`;
+      widgetContent.style.borderRadius = radius;
+      const iconSize = Math.round(currentWidgetSize * 0.5);
+      const iconSvg = widgetIcon.querySelector("svg");
+      if (iconSvg) {
+        (iconSvg as SVGElement).style.width = `${iconSize}px`;
+        (iconSvg as SVGElement).style.height = `${iconSize}px`;
+      }
+      requestWidgetSize(size);
     }
-    widget.setSize(size.width, size.height);
   }
 
   function setModernWidgetExpanded(expanded: boolean) {
+    const wasExpanded = modernWidgetExpanded;
     modernWidgetExpanded = expanded && currentMiniPlayerStyle === "modern";
     miniPlayer.hide();
+    clampWidgetPosition(getWidgetLayoutSize(modernWidgetExpanded));
     modernWidget.setExpanded(modernWidgetExpanded);
-    applyWidgetStyle();
-    requestAnimationFrame(() => clampWidgetPosition());
+    applyWidgetStyle({ delaySizeRequest: wasExpanded && !modernWidgetExpanded });
+    requestAnimationFrame(() => clampWidgetPosition(getWidgetLayoutSize()));
   }
 
   function syncWidget() {
-    widget.setVisible(connected);
+    widget.root.style.display = connected ? "" : "none";
     if (!connected) {
       miniPlayer.hide();
       modernWidgetExpanded = false;
@@ -185,7 +322,7 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   function createWidget(position = savedWidgetPosition) {
-    widget = ctx.ui.createFloatWidget({ width: currentWidgetSize, height: currentWidgetSize, initialPosition: position, tooltip: "Subsonic", chromeless: true });
+    widget = ctx.ui.createFloatWidget({ width: currentWidgetSize, height: currentWidgetSize, tooltip: "Subsonic", chromeless: true });
     widget.root.appendChild(widgetContent);
     animateWidgetMount();
     widget.onDragEnd((dragPosition) => {
@@ -195,56 +332,135 @@ export function setup(ctx: SpindleFrontendContext) {
     });
     applyWidgetStyle();
     syncWidget();
+    if (position) widget.moveTo(position.x, position.y);
   }
 
   function recreateWidget() {
+    recreateWidgetWithSize(currentWidgetSize);
+  }
+
+  function recreateWidgetWithSize(newSize: number) {
     miniPlayer.hide();
     modernWidgetExpanded = false;
     modernWidget.setExpanded(false);
     const position = widget.getPosition();
     lastKnownPosition = position;
     widget.destroy();
+    currentWidgetSize = clampWidgetSize(newSize, currentMiniPlayerStyle);
+    updateWidgetCustomizationUI();
     createWidget(position);
     clampWidgetPosition();
     saveWidgetPrefs();
   }
 
-  function showWidgetMenu(x: number, y: number) {
-    void ctx.ui.showContextMenu({ position: { x, y }, items: [
-      { key: "small", label: "Small (36px)", active: currentWidgetSize === 36 },
-      { key: "medium", label: "Medium (48px)", active: currentWidgetSize === 48 },
-      { key: "large", label: "Large (64px)", active: currentWidgetSize === 64 },
-      { key: "divider", label: "", type: "divider" },
-      { key: "circle", label: "Circle", active: currentArtShape === "circle" },
-      { key: "squircle", label: "Squircle", active: currentArtShape === "squircle" },
-      { key: "divider-2", label: "", type: "divider" },
-      { key: "default", label: "Default Mini Player", active: currentMiniPlayerStyle === "default" },
-      { key: "modern", label: "Modern Lyrics Mini Player", active: currentMiniPlayerStyle === "modern" },
-    ] }).then(({ selectedKey }) => {
-      if (!selectedKey) return;
-      if (selectedKey === "small" || selectedKey === "medium" || selectedKey === "large") {
-        currentWidgetSize = selectedKey === "small" ? 36 : selectedKey === "medium" ? 48 : 64;
-        recreateWidget();
-      } else if (selectedKey === "circle" || selectedKey === "squircle") {
-        currentArtShape = selectedKey;
-        applyWidgetStyle();
-        saveWidgetPrefs();
-      } else if (selectedKey === "default" || selectedKey === "modern") {
-        currentMiniPlayerStyle = selectedKey;
-        currentWidgetSize = selectedKey === "modern" ? 128 : 48;
-        miniPlayer.setStyle(currentMiniPlayerStyle);
-        recreateWidget();
+  let openContextMenuCount = 0;
+  async function showWidgetMenu(x: number, y: number) {
+    const items: Array<{ key: string; label: string; active?: boolean; type?: "divider" }> = [
+      { key: "small", label: "Small", active: currentSizeMode === "small" },
+      { key: "medium", label: "Medium", active: currentSizeMode === "medium" },
+      { key: "large", label: "Large", active: currentSizeMode === "large" },
+      { key: "custom", label: "Custom…", active: currentSizeMode === "custom" },
+    ];
+    if (currentMiniPlayerStyle !== "modern") {
+      items.push(
+        { key: "shape-divider", label: "", type: "divider" },
+        { key: "circle", label: "Circle", active: currentArtShape === "circle" },
+        { key: "squircle", label: "Squircle", active: currentArtShape === "squircle" },
+      );
+    }
+    items.push(
+      { key: "style-divider", label: "", type: "divider" },
+      { key: "mini-default", label: "Default Mini Player", active: currentMiniPlayerStyle === "default" },
+      { key: "mini-modern", label: "Modern Lyrics Mini Player", active: currentMiniPlayerStyle === "modern" },
+    );
+
+    openContextMenuCount += 1;
+    miniPlayer.setUiSuspended(true);
+    modernWidget.setAutoScrollSuspended(true);
+    lyrics.setAutoScrollSuspended(true);
+    let selectedKey: string | null | undefined;
+    try {
+      ({ selectedKey } = await ctx.ui.showContextMenu({ position: { x, y }, items }));
+    } finally {
+      openContextMenuCount = Math.max(0, openContextMenuCount - 1);
+      if (openContextMenuCount === 0) {
+        miniPlayer.setUiSuspended(false);
+        modernWidget.setAutoScrollSuspended(false);
+        lyrics.setAutoScrollSuspended(false);
       }
-    });
+    }
+    if (!selectedKey) return;
+    if (selectedKey === "small" || selectedKey === "medium" || selectedKey === "large") {
+      currentSizeMode = selectedKey;
+      recreateWidgetWithSize(getSizePresets(currentMiniPlayerStyle)[selectedKey]);
+    } else if (selectedKey === "custom") {
+      ctx.events.emit("open-settings", { view: "extensions" });
+    } else if (selectedKey === "circle" || selectedKey === "squircle") {
+      currentArtShape = selectedKey;
+      saveWidgetPrefs();
+      applyWidgetStyle();
+    } else if (selectedKey === "mini-default" || selectedKey === "mini-modern") {
+      currentMiniPlayerStyle = selectedKey === "mini-modern" ? "modern" : "default";
+      currentWidgetSize = currentSizeMode === "custom"
+        ? clampWidgetSize(currentWidgetSize, currentMiniPlayerStyle)
+        : getSizePresets(currentMiniPlayerStyle)[currentSizeMode];
+      miniPlayer.setStyle(currentMiniPlayerStyle);
+      if (currentMiniPlayerStyle !== "modern") {
+        modernWidgetExpanded = false;
+        modernWidget.setExpanded(false);
+      }
+      miniPlayer.hide();
+      saveWidgetPrefs();
+      updateWidgetCustomizationUI();
+      applyWidgetStyle();
+      clampWidgetPosition();
+    }
   }
 
+  let didDrag = false;
+  let pointerStartPos = { x: 0, y: 0 };
+  const DRAG_THRESHOLD = 5;
+  widgetContent.addEventListener("pointerdown", (event) => {
+    didDrag = false;
+    pointerStartPos = { x: event.clientX, y: event.clientY };
+    if (!miniPlayer.isOpen()) return;
+    let dragRaf: number | null = null;
+    const onDragMove = () => {
+      if (didDrag && dragRaf === null) {
+        dragRaf = requestAnimationFrame(() => {
+          miniPlayer.reposition();
+          dragRaf = null;
+        });
+      }
+    };
+    const onDragEnd = () => {
+      document.removeEventListener("pointermove", onDragMove);
+      if (dragRaf !== null) cancelAnimationFrame(dragRaf);
+    };
+    document.addEventListener("pointermove", onDragMove);
+    document.addEventListener("pointerup", onDragEnd, { once: true });
+  });
+  widgetContent.addEventListener("pointermove", (event) => {
+    if (didDrag) return;
+    const dx = Math.abs(event.clientX - pointerStartPos.x);
+    const dy = Math.abs(event.clientY - pointerStartPos.y);
+    if (dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD) didDrag = true;
+  });
+  widgetContent.addEventListener("pointerup", () => {
+    requestAnimationFrame(() => clampWidgetPosition());
+  });
   widgetContent.addEventListener("click", (event) => {
+    if (didDrag) {
+      event.stopPropagation();
+      didDrag = false;
+      return;
+    }
     event.stopPropagation();
     if (currentMiniPlayerStyle === "modern") {
       if (!modernWidgetExpanded) setModernWidgetExpanded(true);
-    } else {
-      miniPlayer.toggle();
+      return;
     }
+    miniPlayer.toggle();
   });
   widgetContent.addEventListener("contextmenu", (event) => {
     event.preventDefault();
@@ -252,15 +468,65 @@ export function setup(ctx: SpindleFrontendContext) {
     showWidgetMenu(event.clientX, event.clientY);
   });
 
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let longPressFired = false;
+  let longPressStart = { x: 0, y: 0 };
+  widgetContent.addEventListener("touchstart", (event) => {
+    longPressFired = false;
+    const touch = event.touches[0];
+    longPressStart = { x: touch.clientX, y: touch.clientY };
+    longPressTimer = setTimeout(() => {
+      longPressFired = true;
+      navigator.vibrate?.(50);
+      void showWidgetMenu(touch.clientX, touch.clientY);
+    }, 500);
+  });
+  widgetContent.addEventListener("touchmove", (event) => {
+    if (!longPressTimer) return;
+    const touch = event.touches[0];
+    if (Math.abs(touch.clientX - longPressStart.x) > 10 || Math.abs(touch.clientY - longPressStart.y) > 10) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  });
+  widgetContent.addEventListener("touchend", (event) => {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+    if (longPressFired) {
+      longPressFired = false;
+      return;
+    }
+    if (currentMiniPlayerStyle === "modern" && modernWidgetExpanded) {
+      didDrag = false;
+      return;
+    }
+    if (!didDrag) {
+      if (event.cancelable) event.preventDefault();
+      if (currentMiniPlayerStyle === "modern") {
+        if (!modernWidgetExpanded) setModernWidgetExpanded(true);
+      } else {
+        miniPlayer.toggle();
+      }
+    }
+    didDrag = false;
+  });
+
   createWidget();
   clampWidgetPosition();
   const handleWidgetViewportResize = () => {
-    if (modernWidgetExpanded) applyWidgetStyle();
+    if (currentMiniPlayerStyle === "modern" && modernWidgetExpanded) {
+      applyWidgetStyle();
+      requestAnimationFrame(() => clampWidgetPosition(getWidgetLayoutSize()));
+      return;
+    }
     clampWidgetPosition();
   };
   window.addEventListener("resize", handleWidgetViewportResize);
   cleanups.push(() => window.removeEventListener("resize", handleWidgetViewportResize));
   cleanups.push(() => {
+    if (widgetSizeRequestTimer) clearTimeout(widgetSizeRequestTimer);
     lastKnownPosition = widget.getPosition();
     saveWidgetPrefs();
     widgetArt.destroy();
