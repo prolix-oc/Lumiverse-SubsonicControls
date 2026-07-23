@@ -115,10 +115,10 @@ async function mapTrack(entry: any, userId?: string): Promise<SearchResult> {
   };
 }
 
-async function mapState(entry: any, isPlaying: boolean, source: PlaybackState["source"], positionMs = 0, userId?: string): Promise<PlaybackState | null> {
+async function mapState(entry: any, isPlaying: boolean, source: PlaybackState["source"], positionMs = 0, userId?: string, positionKnown = true): Promise<PlaybackState | null> {
   if (!entry?.id) return null;
   const track = await mapTrack(entry, userId);
-  return { isPlaying, trackName: track.name, artistName: track.artist, albumName: track.album, albumArtUrl: track.albumArtUrl, progressMs: positionMs, durationMs: track.durationMs, trackUri: track.uri, source };
+  return { isPlaying, trackName: track.name, artistName: track.artist, albumName: track.album, albumArtUrl: track.albumArtUrl, progressMs: positionMs, durationMs: track.durationMs, trackUri: track.uri, positionKnown, source };
 }
 
 export async function ping(userId?: string): Promise<void> { await request("ping", {}, userId); }
@@ -150,7 +150,14 @@ export async function getPlaybackState(userId?: string): Promise<PlaybackState |
   const response = await request("getNowPlaying", {}, userId);
   const entries = response.nowPlaying?.entry || [];
   const own = entries.find((entry: any) => entry.username === config.username);
-  return own ? mapState(own, true, "now_playing", 0, userId) : null;
+  if (!own) return null;
+  // OpenSubsonic's playbackReport extension adds positionMs (milliseconds),
+  // state, and playbackRate to getNowPlaying entries. Navidrome supplies this
+  // field, so use it instead of resetting a synchronized lyric clock to zero.
+  const reportedPositionMs = Number(own.positionMs);
+  const positionKnown = Number.isFinite(reportedPositionMs) && reportedPositionMs >= 0;
+  const isPlaying = typeof own.state === "string" ? own.state.toLowerCase() === "playing" : true;
+  return mapState(own, isPlaying, "now_playing", positionKnown ? reportedPositionMs : 0, userId, positionKnown);
 }
 
 async function jukebox(action: string, values: Record<string, string | number | undefined> = {}, userId?: string): Promise<void> {

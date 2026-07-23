@@ -107,11 +107,11 @@ async function mapTrack(entry, userId) {
     durationMs: durationMs(entry)
   };
 }
-async function mapState(entry, isPlaying, source, positionMs = 0, userId) {
+async function mapState(entry, isPlaying, source, positionMs = 0, userId, positionKnown = true) {
   if (!entry?.id)
     return null;
   const track = await mapTrack(entry, userId);
-  return { isPlaying, trackName: track.name, artistName: track.artist, albumName: track.album, albumArtUrl: track.albumArtUrl, progressMs: positionMs, durationMs: track.durationMs, trackUri: track.uri, source };
+  return { isPlaying, trackName: track.name, artistName: track.artist, albumName: track.album, albumArtUrl: track.albumArtUrl, progressMs: positionMs, durationMs: track.durationMs, trackUri: track.uri, positionKnown, source };
 }
 async function ping(userId) {
   await request("ping", {}, userId);
@@ -141,7 +141,12 @@ async function getPlaybackState(userId) {
   const response = await request("getNowPlaying", {}, userId);
   const entries = response.nowPlaying?.entry || [];
   const own = entries.find((entry) => entry.username === config.username);
-  return own ? mapState(own, true, "now_playing", 0, userId) : null;
+  if (!own)
+    return null;
+  const reportedPositionMs = Number(own.positionMs);
+  const positionKnown = Number.isFinite(reportedPositionMs) && reportedPositionMs >= 0;
+  const isPlaying = typeof own.state === "string" ? own.state.toLowerCase() === "playing" : true;
+  return mapState(own, isPlaying, "now_playing", positionKnown ? reportedPositionMs : 0, userId, positionKnown);
 }
 async function jukebox(action, values = {}, userId) {
   if (!getConfig(userId).enableJukebox)
@@ -239,6 +244,7 @@ var POLL_PLAYING_MS = 1000;
 var POLL_IDLE_MS = 1000;
 var pollingTimers = new Map;
 var stateByUser = new Map;
+var stateObservedAt = new Map;
 var jukeboxUnavailableReasons = new Map;
 var jukeboxAvailabilityChecked = new Set;
 function send(message, userId) {
@@ -298,8 +304,13 @@ async function pushState(userId) {
     send({ type: "state", playbackState: null, connected: false }, userId);
     return null;
   }
-  const state = await getPlaybackState(userId);
+  const fetchedState = await getPlaybackState(userId);
+  const previousState = stateByUser.get(userId);
+  const previousObservedAt = stateObservedAt.get(userId) || Date.now();
+  const now = Date.now();
+  const state = fetchedState && !fetchedState.positionKnown && previousState && previousState.trackUri === fetchedState.trackUri && previousState.isPlaying && fetchedState.isPlaying ? { ...fetchedState, progressMs: Math.min(previousState.progressMs + Math.max(0, now - previousObservedAt), fetchedState.durationMs || Infinity) } : fetchedState;
   stateByUser.set(userId, state);
+  stateObservedAt.set(userId, now);
   pushPlaybackMacros(state);
   send({ type: "state", playbackState: state, connected: true }, userId);
   return state;
@@ -356,6 +367,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         stopPolling(userId);
         setConfig(userId, null);
         stateByUser.delete(userId);
+        stateObservedAt.delete(userId);
         jukeboxUnavailableReasons.delete(userId);
         jukeboxAvailabilityChecked.delete(userId);
         pushPlaybackMacros(null);

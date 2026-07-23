@@ -8,6 +8,7 @@ const POLL_PLAYING_MS = 1_000;
 const POLL_IDLE_MS = 1_000;
 const pollingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const stateByUser = new Map<string, PlaybackState | null>();
+const stateObservedAt = new Map<string, number>();
 const jukeboxUnavailableReasons = new Map<string, string>();
 const jukeboxAvailabilityChecked = new Set<string>();
 
@@ -71,8 +72,18 @@ async function pushState(userId: string): Promise<PlaybackState | null> {
     send({ type: "state", playbackState: null, connected: false }, userId);
     return null;
   }
-  const state = await subsonic.getPlaybackState(userId);
+  const fetchedState = await subsonic.getPlaybackState(userId);
+  const previousState = stateByUser.get(userId);
+  const previousObservedAt = stateObservedAt.get(userId) || Date.now();
+  const now = Date.now();
+  // Classic Subsonic entries do not expose a position. Keep a monotonic local
+  // clock between polls rather than snapping lyrics back to 0 every second.
+  const state = fetchedState && !fetchedState.positionKnown && previousState
+    && previousState.trackUri === fetchedState.trackUri && previousState.isPlaying && fetchedState.isPlaying
+    ? { ...fetchedState, progressMs: Math.min(previousState.progressMs + Math.max(0, now - previousObservedAt), fetchedState.durationMs || Infinity) }
+    : fetchedState;
   stateByUser.set(userId, state);
+  stateObservedAt.set(userId, now);
   pushPlaybackMacros(state);
   send({ type: "state", playbackState: state, connected: true }, userId);
   return state;
@@ -129,6 +140,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         stopPolling(userId);
         subsonic.setConfig(userId, null);
         stateByUser.delete(userId);
+        stateObservedAt.delete(userId);
         jukeboxUnavailableReasons.delete(userId);
         jukeboxAvailabilityChecked.delete(userId);
         pushPlaybackMacros(null);

@@ -33,6 +33,8 @@ export interface PlaybackState {
   progressMs: number;
   durationMs: number;
   trackUri: string;
+  /** Whether the server supplied a real playback position (OpenSubsonic playbackReport). */
+  positionKnown?: boolean;
   source: "jukebox" | "now_playing";
   // Kept optional because the shared Spotify player components can render
   // these capabilities when an integration provides them. Subsonic's
