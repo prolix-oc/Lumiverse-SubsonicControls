@@ -130,7 +130,17 @@ spindle.onFrontendMessage(async (raw, userId) => {
   try {
     await loadUser(userId);
     switch (message.type) {
-      case "get_config": await sendConfig(userId); break;
+      case "get_config":
+        await sendConfig(userId);
+        // The macro host can resolve templates before the drawer has issued
+        // its follow-up get_state request. Prime the push cache as soon as a
+        // persisted connection is loaded so track-detail macros are never
+        // left blank during that window.
+        if (subsonic.isConnected(userId)) {
+          await pushState(userId);
+          startPolling(userId);
+        }
+        break;
       case "get_state":
         await pushState(userId);
         startPolling(userId);

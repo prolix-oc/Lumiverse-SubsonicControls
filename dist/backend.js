@@ -3,8 +3,17 @@
 var CLIENT_NAME = "LumiverseSubsonicControls";
 var API_VERSION = "1.16.1";
 var configs = new Map;
+var coverArtUrls = new Map;
 var activeUserId = null;
 function setConfig(userId, config) {
+  const existing = configs.get(userId);
+  const changed = !existing || !config || existing.serverUrl !== config.serverUrl || existing.username !== config.username || existing.password !== config.password;
+  if (changed) {
+    for (const key of coverArtUrls.keys()) {
+      if (key.startsWith(`${userId}\x00`))
+        coverArtUrls.delete(key);
+    }
+  }
   if (config)
     configs.set(userId, config);
   else
@@ -89,10 +98,17 @@ function isJukeboxUnavailableError(error) {
 async function artUrl(coverArt, userId) {
   if (!coverArt)
     return null;
+  const resolvedUserId = userId || activeUserId || "";
+  const cacheKey = `${resolvedUserId}\x00${coverArt}`;
+  const cached = coverArtUrls.get(cacheKey);
+  if (cached)
+    return cached;
   const config = getConfig(userId);
   const s = salt();
   const params = new URLSearchParams({ u: config.username, t: md5(config.password + s), s, v: API_VERSION, c: CLIENT_NAME, id: coverArt });
-  return `${restRoot(config.serverUrl)}/getCoverArt.view?${params.toString()}`;
+  const url = `${restRoot(config.serverUrl)}/getCoverArt.view?${params.toString()}`;
+  coverArtUrls.set(cacheKey, url);
+  return url;
 }
 function durationMs(entry) {
   return Math.max(0, Number(entry?.duration || 0) * 1000);
@@ -355,6 +371,10 @@ spindle.onFrontendMessage(async (raw, userId) => {
     switch (message.type) {
       case "get_config":
         await sendConfig(userId);
+        if (isConnected(userId)) {
+          await pushState(userId);
+          startPolling(userId);
+        }
         break;
       case "get_state":
         await pushState(userId);

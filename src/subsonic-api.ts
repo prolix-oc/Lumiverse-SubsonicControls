@@ -15,9 +15,20 @@ export interface LyricsData {
 const CLIENT_NAME = "LumiverseSubsonicControls";
 const API_VERSION = "1.16.1";
 const configs = new Map<string, SubsonicConfig>();
+const coverArtUrls = new Map<string, string>();
 let activeUserId: string | null = null;
 
 export function setConfig(userId: string, config: SubsonicConfig | null): void {
+  const existing = configs.get(userId);
+  const changed = !existing || !config
+    || existing.serverUrl !== config.serverUrl
+    || existing.username !== config.username
+    || existing.password !== config.password;
+  if (changed) {
+    for (const key of coverArtUrls.keys()) {
+      if (key.startsWith(`${userId}\u0000`)) coverArtUrls.delete(key);
+    }
+  }
   if (config) configs.set(userId, config);
   else configs.delete(userId);
 }
@@ -96,10 +107,16 @@ export function isJukeboxUnavailableError(error: unknown): boolean {
 
 async function artUrl(coverArt: string | undefined, userId?: string): Promise<string | null> {
   if (!coverArt) return null;
+  const resolvedUserId = userId || activeUserId || "";
+  const cacheKey = `${resolvedUserId}\u0000${coverArt}`;
+  const cached = coverArtUrls.get(cacheKey);
+  if (cached) return cached;
   const config = getConfig(userId);
   const s = salt();
   const params = new URLSearchParams({ u: config.username, t: md5(config.password + s), s, v: API_VERSION, c: CLIENT_NAME, id: coverArt });
-  return `${restRoot(config.serverUrl)}/getCoverArt.view?${params.toString()}`;
+  const url = `${restRoot(config.serverUrl)}/getCoverArt.view?${params.toString()}`;
+  coverArtUrls.set(cacheKey, url);
+  return url;
 }
 
 function durationMs(entry: any): number { return Math.max(0, Number(entry?.duration || 0) * 1000); }

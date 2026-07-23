@@ -4795,6 +4795,118 @@ function setup(ctx) {
   const cleanups = [];
   cleanups.push(ctx.dom.addStyle(SPOTIFY_WIDGET_CSS));
   const send = (message) => ctx.sendToBackend(message);
+  let lastThemeArtUrl = null;
+  let themeApplySeq = 0;
+  let pendingThemeClearTimer = null;
+  const pendingPaletteImages = new Map;
+  function fetchPaletteImage(url) {
+    return new Promise((resolve) => {
+      const requestId = crypto.randomUUID();
+      const timer = setTimeout(() => {
+        pendingPaletteImages.delete(requestId);
+        resolve(null);
+      }, 15000);
+      pendingPaletteImages.set(requestId, { resolve, timer });
+      ctx.sendToBackend({
+        type: "__cors_proxy_request",
+        requestId,
+        url,
+        options: { method: "GET", mediaType: "image" }
+      });
+    });
+  }
+  function resolvePaletteImage(requestId, result) {
+    const pending = pendingPaletteImages.get(requestId);
+    if (!pending)
+      return;
+    pendingPaletteImages.delete(requestId);
+    clearTimeout(pending.timer);
+    const contentType = result?.headers?.["content-type"] || result?.headers?.["Content-Type"] || "image/jpeg";
+    pending.resolve(result?.status && result.status >= 200 && result.status < 300 && result.encoding === "base64" && result.body ? `data:${contentType};base64,${result.body}` : null);
+  }
+  function cancelPendingThemeClear() {
+    if (pendingThemeClearTimer)
+      clearTimeout(pendingThemeClearTimer);
+    pendingThemeClearTimer = null;
+  }
+  function clearAlbumTheme() {
+    cancelPendingThemeClear();
+    themeApplySeq += 1;
+    send({ type: "album_colors", colors: null });
+  }
+  function scheduleAlbumThemeClear(delayMs = 1800) {
+    cancelPendingThemeClear();
+    pendingThemeClearTimer = setTimeout(() => {
+      pendingThemeClearTimer = null;
+      clearAlbumTheme();
+    }, delayMs);
+  }
+  function extractColorsFromImage(url) {
+    return new Promise((resolve) => {
+      const image = new Image;
+      image.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          const size = 32;
+          canvas.width = size;
+          canvas.height = size;
+          const context = canvas.getContext("2d");
+          if (!context)
+            return resolve(null);
+          context.drawImage(image, 0, 0, size, size);
+          const pixels = context.getImageData(0, 0, size, size).data;
+          let bestH = 0, bestS = 0, bestL = 0.5, bestScore = -1;
+          let red = 0, green = 0, blue = 0, count = 0;
+          for (let index = 0;index < pixels.length; index += 4) {
+            const r = pixels[index], g = pixels[index + 1], b = pixels[index + 2];
+            red += r;
+            green += g;
+            blue += b;
+            count += 1;
+            const rn = r / 255, gn = g / 255, bn = b / 255;
+            const max = Math.max(rn, gn, bn), min = Math.min(rn, gn, bn);
+            const lightness = (max + min) / 2;
+            let hue = 0, saturation = 0;
+            if (max !== min) {
+              const delta = max - min;
+              saturation = lightness > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+              if (max === rn)
+                hue = ((gn - bn) / delta + (gn < bn ? 6 : 0)) / 6;
+              else if (max === gn)
+                hue = ((bn - rn) / delta + 2) / 6;
+              else
+                hue = ((rn - gn) / delta + 4) / 6;
+            }
+            const score = saturation * (1 - Math.abs(lightness - 0.5) * 1.6);
+            if (score > bestScore) {
+              bestScore = score;
+              bestH = hue;
+              bestS = saturation;
+              bestL = lightness;
+            }
+          }
+          const averageRed = Math.round(red / count);
+          const averageGreen = Math.round(green / count);
+          const averageBlue = Math.round(blue / count);
+          const luminance = 0.299 * averageRed + 0.587 * averageGreen + 0.114 * averageBlue;
+          resolve({
+            dominant: { r: averageRed, g: averageGreen, b: averageBlue },
+            dominantHsl: { h: Math.round(bestH * 360), s: Math.round(bestS * 100), l: Math.round(bestL * 100) },
+            isLight: luminance > 152
+          });
+        } catch {
+          resolve(null);
+        }
+      };
+      image.onerror = () => resolve(null);
+      fetchPaletteImage(url).then((dataUrl) => {
+        if (dataUrl)
+          image.src = dataUrl;
+        else
+          resolve(null);
+      });
+    });
+  }
   const settings = createSettingsUI(send);
   const settingsMount = ctx.ui.mount("settings_extensions");
   settingsMount.appendChild(settings.root);
@@ -5307,6 +5419,11 @@ function setup(ctx) {
       songBadges.removeMessage(messageId);
   }));
   const messages = ctx.onBackendMessage((raw) => {
+    const proxyResponse = raw;
+    if (proxyResponse.type === "__cors_proxy_response" && proxyResponse.requestId) {
+      resolvePaletteImage(proxyResponse.requestId, proxyResponse.error ? undefined : proxyResponse.result);
+      return;
+    }
     const message = raw;
     switch (message.type) {
       case "config":
@@ -5335,6 +5452,26 @@ function setup(ctx) {
           modernWidget.updateLyrics(null, null, null, false);
         }
         syncWidget();
+        const artUrl = getTrackScopedArtUrl(currentState?.albumArtUrl ?? null, currentState?.trackUri);
+        if (artUrl !== lastThemeArtUrl) {
+          lastThemeArtUrl = artUrl;
+          if (artUrl) {
+            cancelPendingThemeClear();
+            const applySeq = ++themeApplySeq;
+            extractColorsFromImage(artUrl).then((colors) => {
+              if (applySeq !== themeApplySeq || artUrl !== lastThemeArtUrl)
+                return;
+              if (colors)
+                send({ type: "album_colors", colors });
+              else if (!connected)
+                clearAlbumTheme();
+            });
+          } else if (connected) {
+            scheduleAlbumThemeClear();
+          } else {
+            clearAlbumTheme();
+          }
+        }
         break;
       case "connected":
         connected = true;
@@ -5347,6 +5484,8 @@ function setup(ctx) {
         currentState = null;
         lyricsTrackId = null;
         jukeboxEnabled = false;
+        lastThemeArtUrl = null;
+        clearAlbumTheme();
         nowPlaying.update(null, false);
         controls.update(null, false, false);
         lyrics.clear();
@@ -5405,6 +5544,8 @@ function setup(ctx) {
     currentState = null;
     lyricsTrackId = null;
     jukeboxEnabled = false;
+    lastThemeArtUrl = null;
+    clearAlbumTheme();
     settings.update(false, "", "", false, false, null);
     nowPlaying.update(null, false);
     controls.update(null, false, false);
@@ -5412,6 +5553,15 @@ function setup(ctx) {
     syncWidget();
   });
   cleanups.push(permissionChange);
+  cleanups.push(() => {
+    cancelPendingThemeClear();
+    themeApplySeq += 1;
+    for (const [requestId, pending] of pendingPaletteImages) {
+      clearTimeout(pending.timer);
+      pending.resolve(null);
+      pendingPaletteImages.delete(requestId);
+    }
+  });
   send({ type: "get_config" });
   send({ type: "get_state" });
   return () => {
