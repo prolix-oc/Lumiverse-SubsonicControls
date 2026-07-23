@@ -4293,8 +4293,162 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
   };
 }
 
-// src/frontend.ts
+// src/ui/song-badge.ts
 var NOTE_ICON = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>`;
+var PLAY_ICON = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
+function createSongBadgeManager(ctx, send) {
+  const cache = new Map;
+  const activeSwipe = new Map;
+  const badges = new Map;
+  let currentChatId = null;
+  let openMessageId = null;
+  let popover = null;
+  let popArt = null;
+  let popTrack = null;
+  let popArtist = null;
+  let popAlbum = null;
+  let popPlay = null;
+  const snapshotFor = (messageId) => cache.get(messageId)?.get(activeSwipe.get(messageId) ?? 0) || null;
+  function closePopover() {
+    popover?.classList.remove("open");
+    openMessageId = null;
+  }
+  function ensurePopover() {
+    if (popover)
+      return;
+    popover = document.createElement("div");
+    popover.className = "spotify-song-pop";
+    const header = document.createElement("div");
+    header.className = "spotify-song-pop-header";
+    header.textContent = "Playing when generated";
+    const body = document.createElement("div");
+    body.className = "spotify-song-pop-body";
+    popArt = createCrossfadeArt("spotify-song-pop-art");
+    const info = document.createElement("div");
+    info.className = "spotify-song-pop-info";
+    popTrack = document.createElement("div");
+    popTrack.className = "spotify-song-pop-track";
+    popArtist = document.createElement("div");
+    popArtist.className = "spotify-song-pop-artist";
+    popAlbum = document.createElement("div");
+    popAlbum.className = "spotify-song-pop-album";
+    info.append(popTrack, popArtist, popAlbum);
+    body.append(popArt.el, info);
+    const actions = document.createElement("div");
+    actions.className = "spotify-song-pop-actions";
+    popPlay = document.createElement("button");
+    popPlay.type = "button";
+    popPlay.className = "spotify-song-pop-btn spotify-song-pop-btn-primary";
+    popPlay.innerHTML = `${PLAY_ICON}<span>Play</span>`;
+    popPlay.onclick = () => {
+      const snapshot = openMessageId ? snapshotFor(openMessageId) : null;
+      if (snapshot)
+        send({ type: "play", trackUri: snapshot.trackUri });
+      closePopover();
+    };
+    actions.appendChild(popPlay);
+    popover.append(header, body, actions);
+    popover.addEventListener("click", (event) => event.stopPropagation());
+    document.body.appendChild(popover);
+  }
+  function openPopover(messageId, anchor) {
+    const snapshot = snapshotFor(messageId);
+    if (!snapshot)
+      return;
+    ensurePopover();
+    openMessageId = messageId;
+    popArt?.setUrl(getTrackScopedArtUrl(snapshot.albumArtUrl, snapshot.trackUri));
+    if (popTrack)
+      popTrack.textContent = snapshot.trackName;
+    if (popArtist)
+      popArtist.textContent = snapshot.artistName;
+    if (popAlbum)
+      popAlbum.textContent = snapshot.albumName;
+    const rect = anchor.getBoundingClientRect();
+    const width = popover.offsetWidth || 280;
+    popover.style.left = `${Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8))}px`;
+    popover.style.top = `${Math.min(window.innerHeight - (popover.offsetHeight || 180) - 8, rect.bottom + 8)}px`;
+    popover.classList.add("open");
+  }
+  function decorate(messageId) {
+    if (!cache.has(messageId))
+      return;
+    let badge = badges.get(messageId);
+    if (!badge || !badge.isConnected) {
+      const bubble = ctx.dom.findMessageElement(messageId);
+      if (!bubble)
+        return;
+      badge = ctx.dom.inject(bubble, `<button type="button" class="spotify-song-badge" aria-label="Song that was playing" title="Song that was playing">${NOTE_ICON}</button>`, "beforeend");
+      badge.classList.add("spotify-song-badge-wrap");
+      badge.dataset.corner = "right";
+      badge.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openMessageId === messageId ? closePopover() : openPopover(messageId, badge);
+      });
+      badges.set(messageId, badge);
+    }
+    badge.style.display = snapshotFor(messageId) ? "" : "none";
+  }
+  document.addEventListener("click", closePopover, true);
+  window.addEventListener("scroll", closePopover, true);
+  return {
+    setChatSongs(chatId, entries) {
+      if (chatId !== currentChatId)
+        this.reset();
+      currentChatId = chatId;
+      for (const entry of entries) {
+        cache.set(entry.messageId, new Map(Object.entries(entry.bySwipe).map(([swipeId, snapshot]) => [Number(swipeId), snapshot])));
+        activeSwipe.set(entry.messageId, entry.activeSwipe);
+        decorate(entry.messageId);
+      }
+    },
+    setMessageSong(chatId, messageId, swipeId, snapshot) {
+      if (currentChatId && currentChatId !== chatId)
+        return;
+      currentChatId = chatId;
+      const snapshots = cache.get(messageId) || new Map;
+      snapshots.set(swipeId, snapshot);
+      cache.set(messageId, snapshots);
+      activeSwipe.set(messageId, swipeId);
+      decorate(messageId);
+    },
+    decorate,
+    setActiveSwipe(messageId, swipeId) {
+      activeSwipe.set(messageId, swipeId);
+      decorate(messageId);
+      if (openMessageId === messageId && !snapshotFor(messageId))
+        closePopover();
+    },
+    removeMessage(messageId) {
+      cache.delete(messageId);
+      activeSwipe.delete(messageId);
+      const badge = badges.get(messageId);
+      if (badge) {
+        ctx.dom.uninject(badge);
+        badges.delete(messageId);
+      }
+    },
+    reset() {
+      closePopover();
+      for (const messageId of [...badges.keys()])
+        this.removeMessage(messageId);
+      cache.clear();
+      activeSwipe.clear();
+      currentChatId = null;
+    },
+    destroy() {
+      this.reset();
+      document.removeEventListener("click", closePopover, true);
+      window.removeEventListener("scroll", closePopover, true);
+      popArt?.destroy();
+      popover?.remove();
+    }
+  };
+}
+
+// src/frontend.ts
+var NOTE_ICON2 = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>`;
 var WIDGET_EDGE_PAD = 12;
 var WIDGET_PREFS_KEY = "subsonic-controls-widget-prefs";
 function setup(ctx) {
@@ -4312,7 +4466,7 @@ function setup(ctx) {
     description: "Browse a Subsonic-compatible music server and control its optional Jukebox.",
     keywords: ["subsonic", "opensubsonic", "music", "jukebox", "lyrics"],
     headerTitle: "Subsonic",
-    iconSvg: NOTE_ICON
+    iconSvg: NOTE_ICON2
   });
   cleanups.push(() => tab.destroy());
   tab.root.classList.add("spotify-tab-root");
@@ -4374,11 +4528,15 @@ function setup(ctx) {
   }
   const widgetContent = document.createElement("div");
   widgetContent.className = "spotify-float-widget";
+  function animateWidgetMount() {
+    widgetContent.classList.remove("spotify-float-widget-mounted");
+    requestAnimationFrame(() => requestAnimationFrame(() => widgetContent.classList.add("spotify-float-widget-mounted")));
+  }
   const legacyVisual = document.createElement("div");
   legacyVisual.className = "spotify-float-widget-legacy";
   const widgetIcon = document.createElement("div");
   widgetIcon.className = "spotify-float-widget-icon";
-  widgetIcon.innerHTML = NOTE_ICON;
+  widgetIcon.innerHTML = NOTE_ICON2;
   const widgetArt = createCrossfadeArt("spotify-float-widget-art");
   widgetArt.el.style.display = "none";
   legacyVisual.append(widgetIcon, widgetArt.el);
@@ -4453,6 +4611,7 @@ function setup(ctx) {
   function createWidget(position = savedWidgetPosition) {
     widget = ctx.ui.createFloatWidget({ width: currentWidgetSize, height: currentWidgetSize, initialPosition: position, tooltip: "Subsonic", chromeless: true });
     widget.root.appendChild(widgetContent);
+    animateWidgetMount();
     widget.onDragEnd((dragPosition) => {
       lastKnownPosition = dragPosition;
       clampWidgetPosition();
@@ -4532,6 +4691,32 @@ function setup(ctx) {
     modernWidget.destroy();
     widget.destroy();
   });
+  const songBadges = createSongBadgeManager(ctx, send);
+  cleanups.push(() => songBadges.destroy());
+  const requestChatSongs = (chatId) => {
+    if (chatId)
+      send({ type: "get_chat_songs", chatId });
+  };
+  requestChatSongs(ctx.getActiveChat().chatId);
+  cleanups.push(ctx.events.on("CHAT_SWITCHED", (payload) => {
+    songBadges.reset();
+    requestChatSongs(payload.chatId || null);
+  }));
+  cleanups.push(ctx.events.on("CHARACTER_MESSAGE_RENDERED", (payload) => {
+    const messageId = payload.messageId;
+    if (messageId)
+      songBadges.decorate(messageId);
+  }));
+  cleanups.push(ctx.events.on("MESSAGE_SWIPED", (payload) => {
+    const message = payload.message;
+    if (message?.id)
+      songBadges.setActiveSwipe(message.id, message.swipe_id || 0);
+  }));
+  cleanups.push(ctx.events.on("MESSAGE_DELETED", (payload) => {
+    const messageId = payload.messageId;
+    if (messageId)
+      songBadges.removeMessage(messageId);
+  }));
   const messages = ctx.onBackendMessage((raw) => {
     const message = raw;
     switch (message.type) {
@@ -4583,6 +4768,12 @@ function setup(ctx) {
       case "search_results":
         search.setResults(message.results);
         break;
+      case "chat_songs":
+        songBadges.setChatSongs(message.chatId, message.entries);
+        break;
+      case "message_song":
+        songBadges.setMessageSong(message.chatId, message.messageId, message.swipeId, message.snapshot);
+        break;
       case "lyrics":
         if (!lyricsTrackId || message.trackUri === lyricsTrackId) {
           lyrics.update(message.trackUri, message.plainLyrics, message.syncedLyrics, message.instrumental);
@@ -4607,8 +4798,9 @@ function setup(ctx) {
   window.addEventListener("spindle:desktop-widget-returned", handleDesktopWidgetReturned);
   cleanups.push(() => window.removeEventListener("spindle:desktop-widget-returned", handleDesktopWidgetReturned));
   ctx.permissions.getGranted().then((granted) => {
-    if (!granted.includes("cors_proxy")) {
-      ctx.permissions.request(["cors_proxy"], { reason: "Subsonic Controls needs the CORS Proxy permission to connect to your music server." });
+    const needed = ["cors_proxy", "generation", "chat_mutation"].filter((permission) => !granted.includes(permission));
+    if (needed.length) {
+      ctx.permissions.request(needed, { reason: "Subsonic Controls needs CORS access for your server, plus Generation and Chat Mutation to remember the song playing for each assistant reply." });
     }
   });
   const permissionChange = ctx.events.on("SPINDLE_PERMISSION_CHANGED", (payload) => {

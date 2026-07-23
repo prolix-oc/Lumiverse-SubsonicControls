@@ -9,6 +9,7 @@ export type FrontendToBackend =
   | { type: "previous" }
   | { type: "search"; query: string }
   | { type: "queue"; trackUri: string }
+  | { type: "get_chat_songs"; chatId: string }
   | { type: "get_lyrics" }
   | { type: "album_colors"; colors: AlbumColors | null };
 
@@ -16,6 +17,8 @@ export type BackendToFrontend =
   | { type: "state"; playbackState: PlaybackState | null; connected: boolean }
   | { type: "config"; serverUrl: string; username: string; hasPassword: boolean; enableJukebox: boolean; jukeboxUnavailableReason: string | null; connected: boolean }
   | { type: "search_results"; results: SearchResult[] }
+  | { type: "chat_songs"; chatId: string; entries: MessageSongEntry[] }
+  | { type: "message_song"; chatId: string; messageId: string; swipeId: number; snapshot: SongSnapshot }
   | { type: "connected" }
   | { type: "disconnected" }
   | { type: "lyrics"; trackUri: string; plainLyrics: string | null; syncedLyrics: string | null; instrumental: boolean }
@@ -65,6 +68,23 @@ export interface SearchResult {
   albumArtUrl: string | null;
   uri: string;
   durationMs: number;
+}
+
+/** A track frozen at the instant an assistant-message swipe began. */
+export interface SongSnapshot {
+  trackName: string;
+  artistName: string;
+  albumName: string;
+  albumArtUrl: string | null;
+  trackUri: string;
+  isPlaying: boolean;
+  capturedAt: number;
+}
+
+export interface MessageSongEntry {
+  messageId: string;
+  activeSwipe: number;
+  bySwipe: Record<number, SongSnapshot>;
 }
 
 export interface AlbumColors {

@@ -9,6 +9,7 @@ import { createLyricsUI } from "./ui/lyrics";
 import { createMiniPlayerUI } from "./ui/mini-player";
 import { createModernWidgetPlayerUI } from "./ui/modern-widget-player";
 import { createCrossfadeArt, getTrackScopedArtUrl } from "./ui/crossfade-art";
+import { createSongBadgeManager } from "./ui/song-badge";
 
 const NOTE_ICON = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>`;
 const WIDGET_EDGE_PAD = 12;
@@ -94,6 +95,10 @@ export function setup(ctx: SpindleFrontendContext) {
 
   const widgetContent = document.createElement("div");
   widgetContent.className = "spotify-float-widget";
+  function animateWidgetMount() {
+    widgetContent.classList.remove("spotify-float-widget-mounted");
+    requestAnimationFrame(() => requestAnimationFrame(() => widgetContent.classList.add("spotify-float-widget-mounted")));
+  }
   const legacyVisual = document.createElement("div");
   legacyVisual.className = "spotify-float-widget-legacy";
   const widgetIcon = document.createElement("div");
@@ -182,6 +187,7 @@ export function setup(ctx: SpindleFrontendContext) {
   function createWidget(position = savedWidgetPosition) {
     widget = ctx.ui.createFloatWidget({ width: currentWidgetSize, height: currentWidgetSize, initialPosition: position, tooltip: "Subsonic", chromeless: true });
     widget.root.appendChild(widgetContent);
+    animateWidgetMount();
     widget.onDragEnd((dragPosition) => {
       lastKnownPosition = dragPosition;
       clampWidgetPosition();
@@ -263,6 +269,27 @@ export function setup(ctx: SpindleFrontendContext) {
     widget.destroy();
   });
 
+  const songBadges = createSongBadgeManager(ctx, send);
+  cleanups.push(() => songBadges.destroy());
+  const requestChatSongs = (chatId: string | null) => { if (chatId) send({ type: "get_chat_songs", chatId }); };
+  requestChatSongs(ctx.getActiveChat().chatId);
+  cleanups.push(ctx.events.on("CHAT_SWITCHED", (payload) => {
+    songBadges.reset();
+    requestChatSongs((payload as { chatId?: string | null }).chatId || null);
+  }));
+  cleanups.push(ctx.events.on("CHARACTER_MESSAGE_RENDERED", (payload) => {
+    const messageId = (payload as { messageId?: string }).messageId;
+    if (messageId) songBadges.decorate(messageId);
+  }));
+  cleanups.push(ctx.events.on("MESSAGE_SWIPED", (payload) => {
+    const message = (payload as { message?: { id?: string; swipe_id?: number } }).message;
+    if (message?.id) songBadges.setActiveSwipe(message.id, message.swipe_id || 0);
+  }));
+  cleanups.push(ctx.events.on("MESSAGE_DELETED", (payload) => {
+    const messageId = (payload as { messageId?: string }).messageId;
+    if (messageId) songBadges.removeMessage(messageId);
+  }));
+
   const messages = ctx.onBackendMessage((raw) => {
     const message = raw as BackendToFrontend;
     switch (message.type) {
@@ -307,6 +334,8 @@ export function setup(ctx: SpindleFrontendContext) {
         syncWidget();
         break;
       case "search_results": search.setResults(message.results); break;
+      case "chat_songs": songBadges.setChatSongs(message.chatId, message.entries); break;
+      case "message_song": songBadges.setMessageSong(message.chatId, message.messageId, message.swipeId, message.snapshot); break;
       case "lyrics":
         if (!lyricsTrackId || message.trackUri === lyricsTrackId) {
           lyrics.update(message.trackUri, message.plainLyrics, message.syncedLyrics, message.instrumental);
@@ -333,8 +362,9 @@ export function setup(ctx: SpindleFrontendContext) {
   cleanups.push(() => window.removeEventListener("spindle:desktop-widget-returned", handleDesktopWidgetReturned));
 
   ctx.permissions.getGranted().then((granted) => {
-    if (!granted.includes("cors_proxy")) {
-      void ctx.permissions.request(["cors_proxy"], { reason: "Subsonic Controls needs the CORS Proxy permission to connect to your music server." });
+    const needed = ["cors_proxy", "generation", "chat_mutation"].filter((permission) => !granted.includes(permission));
+    if (needed.length) {
+      void ctx.permissions.request(needed, { reason: "Subsonic Controls needs CORS access for your server, plus Generation and Chat Mutation to remember the song playing for each assistant reply." });
     }
   });
   const permissionChange = ctx.events.on("SPINDLE_PERMISSION_CHANGED", (payload: unknown) => {

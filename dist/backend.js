@@ -341,6 +341,9 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "search":
         send({ type: "search_results", results: await search(message.query, userId) }, userId);
         break;
+      case "get_chat_songs":
+        await sendChatSongs(message.chatId, userId);
+        break;
       case "get_lyrics": {
         const state = stateByUser.get(userId) || await getPlaybackState(userId);
         const lyrics = state ? await getLyrics(state.trackUri, userId) : null;
@@ -356,6 +359,83 @@ spindle.onFrontendMessage(async (raw, userId) => {
   }
 });
 spindle.log.info("Subsonic Controls loaded");
+var SONG_META_KEY = "subsonic_song";
+var pendingGenerationSongs = new Map;
+function buildSongSnapshot(state) {
+  if (!state?.trackUri || !state.trackName)
+    return null;
+  return { trackName: state.trackName, artistName: state.artistName, albumName: state.albumName, albumArtUrl: state.albumArtUrl, trackUri: state.trackUri, isPlaying: state.isPlaying, capturedAt: Date.now() };
+}
+async function snapshotForUser(userId) {
+  const cached = stateByUser.get(userId);
+  const state = cached || await getPlaybackState(userId).catch(() => null);
+  return buildSongSnapshot(state);
+}
+function readSongMetadata(message) {
+  return { ...message.metadata || message.extra?.spindle_metadata || {} };
+}
+function readSnapshots(message) {
+  const node = readSongMetadata(message)[SONG_META_KEY];
+  if (!node?.bySwipe)
+    return {};
+  return Object.fromEntries(Object.entries(node.bySwipe).filter(([swipeId, snapshot]) => Number.isInteger(Number(swipeId)) && !!snapshot).map(([swipeId, snapshot]) => [Number(swipeId), snapshot]));
+}
+async function persistSnapshot(chatId, messageId, swipeId, snapshot, userId) {
+  const messages = await spindle.chat.getMessages(chatId);
+  const message = messages.find((candidate) => candidate.id === messageId);
+  if (!message || message.is_user || message.name === "System")
+    return;
+  const targetSwipeId = message.swipe_id ?? swipeId;
+  const metadata = readSongMetadata(message);
+  metadata[SONG_META_KEY] = { bySwipe: { ...readSnapshots(message), [targetSwipeId]: snapshot } };
+  await spindle.chat.updateMessage(chatId, messageId, { metadata, skipChunkRebuild: true });
+  send({ type: "message_song", chatId, messageId, swipeId: targetSwipeId, snapshot }, userId);
+}
+async function sendChatSongs(chatId, userId) {
+  const messages = await spindle.chat.getMessages(chatId);
+  const entries = messages.flatMap((message) => {
+    if (!message.id || message.is_user)
+      return [];
+    const bySwipe = readSnapshots(message);
+    return Object.keys(bySwipe).length ? [{ messageId: message.id, activeSwipe: message.swipe_id || 0, bySwipe }] : [];
+  });
+  send({ type: "chat_songs", chatId, entries }, userId);
+}
+function onGenerationStarted(payload, userId) {
+  const generationId = payload.generationId;
+  if (!generationId || !userId)
+    return;
+  snapshotForUser(userId).then((snapshot) => {
+    if (snapshot)
+      pendingGenerationSongs.set(generationId, { snapshot, userId });
+  });
+}
+function onGenerationEnded(payload) {
+  const event = payload;
+  const pending = event.generationId ? pendingGenerationSongs.get(event.generationId) : null;
+  if (event.generationId)
+    pendingGenerationSongs.delete(event.generationId);
+  if (!pending || event.error || !event.chatId || !event.messageId)
+    return;
+  persistSnapshot(event.chatId, event.messageId, 0, pending.snapshot, pending.userId).catch((error) => spindle.log.warn(`Song snapshot failed: ${error?.message || error}`));
+}
+var generationUnsubscribers = [];
+function setupGenerationCapture() {
+  for (const unsubscribe of generationUnsubscribers)
+    unsubscribe();
+  generationUnsubscribers = [];
+  try {
+    generationUnsubscribers.push(spindle.on("GENERATION_STARTED", onGenerationStarted));
+    generationUnsubscribers.push(spindle.on("GENERATION_ENDED", onGenerationEnded));
+  } catch (error) {
+    spindle.log.warn(`Song snapshot subscription failed: ${error?.message || error}`);
+  }
+}
+setupGenerationCapture();
+spindle.permissions.onChanged(({ permission, granted }) => {
+  if (permission === "generation" && granted)
+    setupGenerationCapture();
+});
 async function getMacroPlaybackState() {
   return isConnected() ? getPlaybackState().catch(() => null) : null;
 }

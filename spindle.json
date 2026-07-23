@@ -1,12 +1,12 @@
 {
   "identifier": "subsonic_controls",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "name": "Subsonic Controls",
   "author": "Prolix OCs",
   "github": "",
   "homepage": "https://lumiverse.chat",
   "description": "Browse a Subsonic-compatible music server, view now playing and lyrics, and control its optional server-side Jukebox.",
-  "permissions": ["cors_proxy", "ui_panels"],
+  "permissions": ["cors_proxy", "ui_panels", "generation", "chat_mutation"],
   "entry_backend": "dist/backend.js",
   "entry_frontend": "dist/frontend.js",
   "minimum_lumiverse_version": "1.0.0"
