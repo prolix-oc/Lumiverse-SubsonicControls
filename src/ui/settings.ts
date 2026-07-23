@@ -2,7 +2,7 @@ import type { RemoteControl } from "../types";
 
 export interface SettingsUI {
   root: HTMLElement;
-  update(connected: boolean, serverUrl: string, username: string, hasPassword: boolean, remoteControl: RemoteControl, feishinUrl: string, feishinUsername: string, hasFeishinPassword: boolean, jukeboxUnavailableReason: string | null): void;
+  update(connected: boolean, serverUrl: string, username: string, hasPassword: boolean, remoteControl: RemoteControl, feishinUrl: string, feishinUsername: string, hasFeishinPassword: boolean, playbackPositionOffsetMs: number, jukeboxUnavailableReason: string | null): void;
   setConnecting(): void;
   destroy(): void;
 }
@@ -23,6 +23,10 @@ export function createSettingsUI(sendToBackend: (message: unknown) => void): Set
   const serverUrl = makeField("Subsonic server URL", "url", "https://music.example.com (or …/rest)");
   const username = makeField("Subsonic username", "text", "Subsonic username");
   const password = makeField("Subsonic password", "password", "Subsonic password");
+  const playbackPositionOffset = makeField("Playback position offset (ms)", "number", "1000");
+  playbackPositionOffset.min = "-10000"; playbackPositionOffset.max = "10000"; playbackPositionOffset.step = "100";
+  const playbackPositionOffsetNote = document.createElement("div"); playbackPositionOffsetNote.style.cssText = "font-size:0.8em;opacity:0.65;margin-top:-6px";
+  playbackPositionOffsetNote.textContent = "Adds time to the server's reported playback position for synchronized lyrics. Default: 1000 ms; use a negative value if lyrics run ahead."; body.append(playbackPositionOffsetNote);
   const controllerLabel = document.createElement("label"); controllerLabel.className = "spotify-settings-label"; controllerLabel.append("Playback controls");
   const controller = document.createElement("select"); controller.className = "spotify-input";
   for (const [value, label] of [["none", "Now playing only"], ["jukebox", "Server-side Jukebox"], ["feishin", "Feishin Desktop Remote"]]) {
@@ -51,8 +55,9 @@ export function createSettingsUI(sendToBackend: (message: unknown) => void): Set
     jukeboxUnavailable.style.display = controller.value === "jukebox" && jukeboxUnavailable.textContent ? "" : "none";
   }
   controller.onchange = syncControllerFields;
-  function update(connected: boolean, url: string, user: string, hasPassword: boolean, remoteControl: RemoteControl, remoteUrl: string, remoteUser: string, hasRemotePassword: boolean, unavailable: string | null) {
+  function update(connected: boolean, url: string, user: string, hasPassword: boolean, remoteControl: RemoteControl, remoteUrl: string, remoteUser: string, hasRemotePassword: boolean, positionOffsetMs: number, unavailable: string | null) {
     isConnected = connected; if (url) serverUrl.value = url; if (user) username.value = user; if (remoteUrl) feishinUrl.value = remoteUrl; if (remoteUser) feishinUsername.value = remoteUser;
+    playbackPositionOffset.value = String(positionOffsetMs);
     controller.value = remoteControl; jukeboxUnavailable.textContent = unavailable || ""; syncControllerFields();
     for (const input of [serverUrl, username, password, controller, feishinUrl, feishinUsername, feishinPassword]) input.disabled = connected;
     password.value = ""; feishinPassword.value = "";
@@ -68,8 +73,14 @@ export function createSettingsUI(sendToBackend: (message: unknown) => void): Set
       status.innerHTML = '<span class="spotify-status-dot disconnected"></span><span style="color:#e74c3c">Enter the Subsonic server credentials and, when selected, a Feishin Remote URL.</span>'; return;
     }
     button.disabled = true; button.textContent = "Connecting…";
-    sendToBackend({ type: "connect", serverUrl: serverUrl.value.trim(), username: username.value.trim(), password: password.value, remoteControl, feishinUrl: feishinUrl.value.trim(), feishinUsername: feishinUsername.value.trim(), feishinPassword: feishinPassword.value });
+    sendToBackend({ type: "connect", serverUrl: serverUrl.value.trim(), username: username.value.trim(), password: password.value, remoteControl, feishinUrl: feishinUrl.value.trim(), feishinUsername: feishinUsername.value.trim(), feishinPassword: feishinPassword.value, playbackPositionOffsetMs: Number(playbackPositionOffset.value) });
   };
-  update(false, "", "", false, "none", "", "", false, null);
+  playbackPositionOffset.onchange = () => {
+    const value = Number(playbackPositionOffset.value);
+    if (!Number.isFinite(value)) return;
+    playbackPositionOffset.value = String(Math.max(-10_000, Math.min(10_000, Math.round(value))));
+    if (isConnected) sendToBackend({ type: "set_playback_position_offset", playbackPositionOffsetMs: Number(playbackPositionOffset.value) });
+  };
+  update(false, "", "", false, "none", "", "", false, 1000, null);
   return { root, update, setConnecting() { button.disabled = true; button.textContent = "Connecting…"; }, destroy() { root.remove(); } };
 }

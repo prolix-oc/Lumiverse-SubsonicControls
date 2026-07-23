@@ -12,6 +12,9 @@ import {
 type StoredConfig = Omit<SubsonicConfig, "password" | "feishinPassword">;
 const POLL_PLAYING_MS = 1_000;
 const POLL_IDLE_MS = 1_000;
+const DEFAULT_PLAYBACK_POSITION_OFFSET_MS = 1_000;
+const MIN_PLAYBACK_POSITION_OFFSET_MS = -10_000;
+const MAX_PLAYBACK_POSITION_OFFSET_MS = 10_000;
 const pollingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pollingUsers = new Set<string>();
 const stateByUser = new Map<string, PlaybackState | null>();
@@ -58,12 +61,18 @@ function startFeishin(config: SubsonicConfig, userId: string): void {
 }
 
 async function loadConfig(userId: string): Promise<SubsonicConfig | null> {
-  const stored = await spindle.userStorage.getJson("config.json", { fallback: { serverUrl: "", username: "", enableJukebox: false, remoteControl: "none", feishinUrl: "", feishinUsername: "" }, userId }) as StoredConfig;
+  const stored = await spindle.userStorage.getJson("config.json", { fallback: { serverUrl: "", username: "", enableJukebox: false, remoteControl: "none", feishinUrl: "", feishinUsername: "", playbackPositionOffsetMs: DEFAULT_PLAYBACK_POSITION_OFFSET_MS }, userId }) as StoredConfig;
   const password = await spindle.enclave.get("subsonic_password", userId);
   const feishinPassword = await spindle.enclave.get("feishin_password", userId);
   if (!stored.serverUrl || !stored.username || !password) return null;
   const remoteControl = stored.remoteControl === "feishin" || stored.remoteControl === "jukebox" ? stored.remoteControl : stored.enableJukebox ? "jukebox" : "none";
-  return { ...stored, remoteControl, enableJukebox: remoteControl === "jukebox", feishinUrl: stored.feishinUrl || "", feishinUsername: stored.feishinUsername || "", password, feishinPassword: feishinPassword || "" };
+  return { ...stored, remoteControl, enableJukebox: remoteControl === "jukebox", feishinUrl: stored.feishinUrl || "", feishinUsername: stored.feishinUsername || "", playbackPositionOffsetMs: normalizePlaybackPositionOffset(stored.playbackPositionOffsetMs), password, feishinPassword: feishinPassword || "" };
+}
+
+function normalizePlaybackPositionOffset(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return DEFAULT_PLAYBACK_POSITION_OFFSET_MS;
+  return Math.max(MIN_PLAYBACK_POSITION_OFFSET_MS, Math.min(MAX_PLAYBACK_POSITION_OFFSET_MS, Math.round(numeric)));
 }
 
 async function loadUser(userId: string): Promise<boolean> {
@@ -120,7 +129,7 @@ function syncLyricsForTrackChange(userId: string, previousTrackUri: string | nul
 }
 
 async function saveConfig(config: SubsonicConfig, userId: string): Promise<void> {
-  await spindle.userStorage.setJson("config.json", { serverUrl: config.serverUrl, username: config.username, enableJukebox: config.enableJukebox, remoteControl: config.remoteControl, feishinUrl: config.feishinUrl, feishinUsername: config.feishinUsername }, { userId });
+  await spindle.userStorage.setJson("config.json", { serverUrl: config.serverUrl, username: config.username, enableJukebox: config.enableJukebox, remoteControl: config.remoteControl, feishinUrl: config.feishinUrl, feishinUsername: config.feishinUsername, playbackPositionOffsetMs: normalizePlaybackPositionOffset(config.playbackPositionOffsetMs) }, { userId });
   await spindle.enclave.put("subsonic_password", config.password, userId);
   await spindle.enclave.put("feishin_password", config.feishinPassword, userId);
   subsonic.setConfig(userId, config);
@@ -186,13 +195,22 @@ async function pushState(userId: string): Promise<PlaybackState | null> {
   const previousState = stateByUser.get(userId);
   const previousObservedAt = stateObservedAt.get(userId) || Date.now();
   const now = Date.now();
+  const canonicalState = fetchedState?.positionKnown
+    ? {
+      ...fetchedState,
+      progressMs: Math.min(
+        Math.max(0, fetchedState.progressMs + normalizePlaybackPositionOffset(config?.playbackPositionOffsetMs)),
+        fetchedState.durationMs || Infinity,
+      ),
+    }
+    : fetchedState;
   // A server-reported position is canonical, especially on a track change.
   // Only classic entries with no position at all use the local monotonic
   // clock, and never across track URIs.
-  const state = fetchedState && !fetchedState.positionKnown && previousState
-    && previousState.trackUri === fetchedState.trackUri && previousState.isPlaying && fetchedState.isPlaying
-    ? { ...fetchedState, progressMs: Math.min(previousState.progressMs + Math.max(0, now - previousObservedAt), fetchedState.durationMs || Infinity) }
-    : fetchedState;
+  const state = canonicalState && !canonicalState.positionKnown && previousState
+    && previousState.trackUri === canonicalState.trackUri && previousState.isPlaying && canonicalState.isPlaying
+    ? { ...canonicalState, progressMs: Math.min(previousState.progressMs + Math.max(0, now - previousObservedAt), canonicalState.durationMs || Infinity) }
+    : canonicalState;
   stateByUser.set(userId, state);
   stateObservedAt.set(userId, now);
   pushPlaybackMacros(state);
@@ -224,7 +242,7 @@ function startPolling(userId: string): void {
 
 async function sendConfig(userId: string): Promise<void> {
   const config = await loadConfig(userId);
-  send({ type: "config", serverUrl: config?.serverUrl || "", username: config?.username || "", hasPassword: !!config?.password, remoteControl: config?.remoteControl || "none", feishinUrl: config?.feishinUrl || "", feishinUsername: config?.feishinUsername || "", hasFeishinPassword: !!config?.feishinPassword, jukeboxUnavailableReason: jukeboxUnavailableReasons.get(userId) || null, connected: !!config }, userId);
+  send({ type: "config", serverUrl: config?.serverUrl || "", username: config?.username || "", hasPassword: !!config?.password, remoteControl: config?.remoteControl || "none", feishinUrl: config?.feishinUrl || "", feishinUsername: config?.feishinUsername || "", hasFeishinPassword: !!config?.feishinPassword, playbackPositionOffsetMs: config?.playbackPositionOffsetMs ?? DEFAULT_PLAYBACK_POSITION_OFFSET_MS, jukeboxUnavailableReason: jukeboxUnavailableReasons.get(userId) || null, connected: !!config }, userId);
 }
 
 async function updateTheme(colors: AlbumColors | null, userId: string): Promise<void> {
@@ -260,7 +278,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if ((await loadConfig(userId))?.remoteControl !== "feishin") startPolling(userId);
         break;
       case "connect": {
-        const config: SubsonicConfig = { serverUrl: message.serverUrl, username: message.username, password: message.password, remoteControl: message.remoteControl, enableJukebox: message.remoteControl === "jukebox", feishinUrl: message.feishinUrl, feishinUsername: message.feishinUsername, feishinPassword: message.feishinPassword };
+        const config: SubsonicConfig = { serverUrl: message.serverUrl, username: message.username, password: message.password, remoteControl: message.remoteControl, enableJukebox: message.remoteControl === "jukebox", feishinUrl: message.feishinUrl, feishinUsername: message.feishinUsername, feishinPassword: message.feishinPassword, playbackPositionOffsetMs: normalizePlaybackPositionOffset(message.playbackPositionOffsetMs) };
         subsonic.setConfig(userId, config);
         await subsonic.ping(userId);
         stateByUser.delete(userId);
@@ -272,6 +290,15 @@ spindle.onFrontendMessage(async (raw, userId) => {
         send({ type: "connected" }, userId);
         await sendConfig(userId);
         if (config.remoteControl !== "feishin") startPolling(userId);
+        break;
+      }
+      case "set_playback_position_offset": {
+        const config = await loadConfig(userId);
+        if (!config) break;
+        config.playbackPositionOffsetMs = normalizePlaybackPositionOffset(message.playbackPositionOffsetMs);
+        await saveConfig(config, userId);
+        await sendConfig(userId);
+        await pushState(userId);
         break;
       }
       case "disconnect":

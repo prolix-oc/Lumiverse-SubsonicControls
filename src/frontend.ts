@@ -194,6 +194,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let configuredFeishinUrl = "";
   let configuredFeishinUsername = "";
   let configuredHasFeishinPassword = false;
+  let configuredPlaybackPositionOffsetMs = 1_000;
   let configuredJukeboxUnavailableReason: string | null = null;
   type ArtShape = "circle" | "squircle";
   type SizeMode = "small" | "medium" | "large" | "custom";
@@ -701,8 +702,9 @@ export function setup(ctx: SpindleFrontendContext) {
         configuredFeishinUrl = message.feishinUrl;
         configuredFeishinUsername = message.feishinUsername;
         configuredHasFeishinPassword = message.hasFeishinPassword;
+        configuredPlaybackPositionOffsetMs = message.playbackPositionOffsetMs;
         configuredJukeboxUnavailableReason = message.jukeboxUnavailableReason;
-        settings.update(message.connected, message.serverUrl, message.username, message.hasPassword, message.remoteControl, message.feishinUrl, message.feishinUsername, message.hasFeishinPassword, message.jukeboxUnavailableReason);
+        settings.update(message.connected, message.serverUrl, message.username, message.hasPassword, message.remoteControl, message.feishinUrl, message.feishinUsername, message.hasFeishinPassword, message.playbackPositionOffsetMs, message.jukeboxUnavailableReason);
         search.setAvailable(true);
         search.setPlaybackAvailable(message.remoteControl === "jukebox");
         controls.update(currentState, connected, message.remoteControl !== "none", message.remoteControl === "feishin" ? "Feishin Controls" : "Jukebox Controls");
@@ -753,7 +755,7 @@ export function setup(ctx: SpindleFrontendContext) {
         break;
       case "disconnected":
         connected = false; currentState = null; lyricsTrackId = null; jukeboxEnabled = false;
-        settings.update(false, configuredServerUrl, configuredUsername, configuredHasPassword, remoteControl, configuredFeishinUrl, configuredFeishinUsername, configuredHasFeishinPassword, null);
+        settings.update(false, configuredServerUrl, configuredUsername, configuredHasPassword, remoteControl, configuredFeishinUrl, configuredFeishinUsername, configuredHasFeishinPassword, configuredPlaybackPositionOffsetMs, null);
         search.setAvailable(true);
         search.setPlaybackAvailable(remoteControl === "jukebox");
         lastThemeArtUrl = null;
@@ -810,7 +812,7 @@ export function setup(ctx: SpindleFrontendContext) {
     jukeboxEnabled = false;
     lastThemeArtUrl = null;
     clearAlbumTheme();
-    settings.update(false, "", "", false, "none", "", "", false, null);
+    settings.update(false, "", "", false, "none", "", "", false, configuredPlaybackPositionOffsetMs, null);
     nowPlaying.update(null, false);
     controls.update(null, false, false);
     lyrics.clear();

@@ -2244,6 +2244,14 @@ function createSettingsUI(sendToBackend) {
   const serverUrl = makeField("Subsonic server URL", "url", "https://music.example.com (or …/rest)");
   const username = makeField("Subsonic username", "text", "Subsonic username");
   const password = makeField("Subsonic password", "password", "Subsonic password");
+  const playbackPositionOffset = makeField("Playback position offset (ms)", "number", "1000");
+  playbackPositionOffset.min = "-10000";
+  playbackPositionOffset.max = "10000";
+  playbackPositionOffset.step = "100";
+  const playbackPositionOffsetNote = document.createElement("div");
+  playbackPositionOffsetNote.style.cssText = "font-size:0.8em;opacity:0.65;margin-top:-6px";
+  playbackPositionOffsetNote.textContent = "Adds time to the server's reported playback position for synchronized lyrics. Default: 1000 ms; use a negative value if lyrics run ahead.";
+  body.append(playbackPositionOffsetNote);
   const controllerLabel = document.createElement("label");
   controllerLabel.className = "spotify-settings-label";
   controllerLabel.append("Playback controls");
@@ -2301,7 +2309,7 @@ function createSettingsUI(sendToBackend) {
     jukeboxUnavailable.style.display = controller.value === "jukebox" && jukeboxUnavailable.textContent ? "" : "none";
   }
   controller.onchange = syncControllerFields;
-  function update(connected, url, user, hasPassword, remoteControl, remoteUrl, remoteUser, hasRemotePassword, unavailable) {
+  function update(connected, url, user, hasPassword, remoteControl, remoteUrl, remoteUser, hasRemotePassword, positionOffsetMs, unavailable) {
     isConnected = connected;
     if (url)
       serverUrl.value = url;
@@ -2311,6 +2319,7 @@ function createSettingsUI(sendToBackend) {
       feishinUrl.value = remoteUrl;
     if (remoteUser)
       feishinUsername.value = remoteUser;
+    playbackPositionOffset.value = String(positionOffsetMs);
     controller.value = remoteControl;
     jukeboxUnavailable.textContent = unavailable || "";
     syncControllerFields();
@@ -2335,9 +2344,17 @@ function createSettingsUI(sendToBackend) {
     }
     button.disabled = true;
     button.textContent = "Connecting…";
-    sendToBackend({ type: "connect", serverUrl: serverUrl.value.trim(), username: username.value.trim(), password: password.value, remoteControl, feishinUrl: feishinUrl.value.trim(), feishinUsername: feishinUsername.value.trim(), feishinPassword: feishinPassword.value });
+    sendToBackend({ type: "connect", serverUrl: serverUrl.value.trim(), username: username.value.trim(), password: password.value, remoteControl, feishinUrl: feishinUrl.value.trim(), feishinUsername: feishinUsername.value.trim(), feishinPassword: feishinPassword.value, playbackPositionOffsetMs: Number(playbackPositionOffset.value) });
   };
-  update(false, "", "", false, "none", "", "", false, null);
+  playbackPositionOffset.onchange = () => {
+    const value = Number(playbackPositionOffset.value);
+    if (!Number.isFinite(value))
+      return;
+    playbackPositionOffset.value = String(Math.max(-1e4, Math.min(1e4, Math.round(value))));
+    if (isConnected)
+      sendToBackend({ type: "set_playback_position_offset", playbackPositionOffsetMs: Number(playbackPositionOffset.value) });
+  };
+  update(false, "", "", false, "none", "", "", false, 1000, null);
   return { root, update, setConnecting() {
     button.disabled = true;
     button.textContent = "Connecting…";
@@ -5046,6 +5063,7 @@ function setup(ctx) {
   let configuredFeishinUrl = "";
   let configuredFeishinUsername = "";
   let configuredHasFeishinPassword = false;
+  let configuredPlaybackPositionOffsetMs = 1000;
   let configuredJukeboxUnavailableReason = null;
   const DEFAULT_SIZE_PRESETS = { small: 36, medium: 48, large: 64 };
   const MODERN_SIZE_PRESETS = { small: 112, medium: 128, large: 144 };
@@ -5533,8 +5551,9 @@ function setup(ctx) {
         configuredFeishinUrl = message.feishinUrl;
         configuredFeishinUsername = message.feishinUsername;
         configuredHasFeishinPassword = message.hasFeishinPassword;
+        configuredPlaybackPositionOffsetMs = message.playbackPositionOffsetMs;
         configuredJukeboxUnavailableReason = message.jukeboxUnavailableReason;
-        settings.update(message.connected, message.serverUrl, message.username, message.hasPassword, message.remoteControl, message.feishinUrl, message.feishinUsername, message.hasFeishinPassword, message.jukeboxUnavailableReason);
+        settings.update(message.connected, message.serverUrl, message.username, message.hasPassword, message.remoteControl, message.feishinUrl, message.feishinUsername, message.hasFeishinPassword, message.playbackPositionOffsetMs, message.jukeboxUnavailableReason);
         search.setAvailable(true);
         search.setPlaybackAvailable(message.remoteControl === "jukebox");
         controls.update(currentState, connected, message.remoteControl !== "none", message.remoteControl === "feishin" ? "Feishin Controls" : "Jukebox Controls");
@@ -5591,7 +5610,7 @@ function setup(ctx) {
         currentState = null;
         lyricsTrackId = null;
         jukeboxEnabled = false;
-        settings.update(false, configuredServerUrl, configuredUsername, configuredHasPassword, remoteControl, configuredFeishinUrl, configuredFeishinUsername, configuredHasFeishinPassword, null);
+        settings.update(false, configuredServerUrl, configuredUsername, configuredHasPassword, remoteControl, configuredFeishinUrl, configuredFeishinUsername, configuredHasFeishinPassword, configuredPlaybackPositionOffsetMs, null);
         search.setAvailable(true);
         search.setPlaybackAvailable(remoteControl === "jukebox");
         lastThemeArtUrl = null;
@@ -5656,7 +5675,7 @@ function setup(ctx) {
     jukeboxEnabled = false;
     lastThemeArtUrl = null;
     clearAlbumTheme();
-    settings.update(false, "", "", false, "none", "", "", false, null);
+    settings.update(false, "", "", false, "none", "", "", false, configuredPlaybackPositionOffsetMs, null);
     nowPlaying.update(null, false);
     controls.update(null, false, false);
     lyrics.clear();
