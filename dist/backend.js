@@ -194,6 +194,7 @@ var POLL_IDLE_MS = 15000;
 var pollingTimers = new Map;
 var stateByUser = new Map;
 var jukeboxUnavailableReasons = new Map;
+var jukeboxAvailabilityChecked = new Set;
 function send(message, userId) {
   spindle.sendToFrontend(message, userId);
 }
@@ -208,12 +209,36 @@ async function loadUser(userId) {
   const config = await loadConfig(userId);
   setConfig(userId, config);
   setActiveUser(userId);
+  if (config && await verifyConfiguredJukebox(config, userId))
+    await saveConfig(config, userId);
   return !!config;
 }
 async function saveConfig(config, userId) {
   await spindle.userStorage.setJson("config.json", { serverUrl: config.serverUrl, username: config.username, enableJukebox: config.enableJukebox }, { userId });
   await spindle.enclave.put("subsonic_password", config.password, userId);
   setConfig(userId, config);
+}
+async function verifyConfiguredJukebox(config, userId) {
+  if (!config.enableJukebox) {
+    jukeboxUnavailableReasons.delete(userId);
+    return false;
+  }
+  if (jukeboxAvailabilityChecked.has(userId))
+    return false;
+  try {
+    await verifyJukebox(userId);
+    jukeboxUnavailableReasons.delete(userId);
+    jukeboxAvailabilityChecked.add(userId);
+    return false;
+  } catch (error) {
+    if (!isJukeboxUnavailableError(error))
+      throw error;
+    config.enableJukebox = false;
+    jukeboxUnavailableReasons.set(userId, error.message);
+    jukeboxAvailabilityChecked.add(userId);
+    spindle.log.warn(`Jukebox disabled for ${userId}: ${error.message}`);
+    return true;
+  }
 }
 function stopPolling(userId) {
   const timer = pollingTimers.get(userId);
@@ -273,20 +298,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const config = { serverUrl: message.serverUrl, username: message.username, password: message.password, enableJukebox: message.enableJukebox };
         setConfig(userId, config);
         await ping(userId);
-        if (config.enableJukebox) {
-          try {
-            await verifyJukebox(userId);
-            jukeboxUnavailableReasons.delete(userId);
-          } catch (error) {
-            if (!isJukeboxUnavailableError(error))
-              throw error;
-            config.enableJukebox = false;
-            jukeboxUnavailableReasons.set(userId, error.message);
-            spindle.log.warn(`Jukebox disabled for ${userId}: ${error.message}`);
-          }
-        } else {
-          jukeboxUnavailableReasons.delete(userId);
-        }
+        jukeboxAvailabilityChecked.delete(userId);
+        await verifyConfiguredJukebox(config, userId);
         await saveConfig(config, userId);
         send({ type: "connected" }, userId);
         await sendConfig(userId);
@@ -298,6 +311,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         setConfig(userId, null);
         stateByUser.delete(userId);
         jukeboxUnavailableReasons.delete(userId);
+        jukeboxAvailabilityChecked.delete(userId);
         pushPlaybackMacros(null);
         await spindle.userStorage.delete("config.json", userId).catch(() => {});
         await spindle.enclave.delete("subsonic_password", userId);
