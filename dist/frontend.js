@@ -2277,7 +2277,7 @@ function createSettingsUI(sendToBackend) {
   const feishinPassword = makeFeishinField("Feishin password", "password", "Optional Remote password");
   const feishinNote = document.createElement("div");
   feishinNote.style.cssText = "font-size:0.8em;opacity:0.65;margin-top:4px";
-  feishinNote.textContent = "Connects directly to Feishin's desktop Remote server; library search and lyrics still use the Subsonic server above.";
+  feishinNote.textContent = "Feishin Remote requires WebSocket transport; its HTTP server only serves the Remote page and credentials. Library search and lyrics still use the Subsonic server above.";
   feishinFields.append(feishinNote);
   body.append(feishinFields);
   const actions = document.createElement("div");
@@ -3540,16 +3540,25 @@ function createMiniPlayerUI(sendToBackend, onExpandClick, getWidgetRect) {
       animFrameId = null;
     }
   }
+  function supportsMiniPlayerTransport() {
+    return currentState?.source !== "feishin" && currentState?.source !== "jukebox";
+  }
   prevBtn.addEventListener("click", (e) => {
     e.stopPropagation();
+    if (!supportsMiniPlayerTransport())
+      return;
     sendToBackend({ type: "previous" });
   });
   nextBtn.addEventListener("click", (e) => {
     e.stopPropagation();
+    if (!supportsMiniPlayerTransport())
+      return;
     sendToBackend({ type: "next" });
   });
   playPauseBtn.addEventListener("click", (e) => {
     e.stopPropagation();
+    if (!supportsMiniPlayerTransport())
+      return;
     sendToBackend({ type: isPlaying ? "pause" : "play" });
   });
   expandBtn.addEventListener("click", (e) => {
@@ -3731,8 +3740,13 @@ function createMiniPlayerUI(sendToBackend, onExpandClick, getWidgetRect) {
     }
     header.style.display = "";
     progressRow.style.display = "";
+    const canUseTransport = supportsMiniPlayerTransport();
     controls.style.display = "";
-    volumeRow.style.display = "";
+    controls.hidden = !canUseTransport;
+    prevBtn.disabled = !canUseTransport;
+    playPauseBtn.disabled = !canUseTransport;
+    nextBtn.disabled = !canUseTransport;
+    volumeRow.hidden = true;
     emptyState.style.display = "none";
     if (state.deviceName) {
       deviceName.textContent = state.deviceName;
@@ -4379,9 +4393,21 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
       animFrameId = null;
     }
   }
-  prevBtn.addEventListener("click", () => sendToBackend({ type: "previous" }));
-  nextBtn.addEventListener("click", () => sendToBackend({ type: "next" }));
-  playPauseBtn.addEventListener("click", () => sendToBackend({ type: state?.isPlaying ? "pause" : "play" }));
+  function supportsMiniPlayerTransport() {
+    return state?.source !== "feishin" && state?.source !== "jukebox";
+  }
+  prevBtn.addEventListener("click", () => {
+    if (supportsMiniPlayerTransport())
+      sendToBackend({ type: "previous" });
+  });
+  nextBtn.addEventListener("click", () => {
+    if (supportsMiniPlayerTransport())
+      sendToBackend({ type: "next" });
+  });
+  playPauseBtn.addEventListener("click", () => {
+    if (supportsMiniPlayerTransport())
+      sendToBackend({ type: state?.isPlaying ? "pause" : "play" });
+  });
   const cleanupProgressCommit = bindProgressCommitOnRelease(progressBar, {
     getMaxValue: () => currentDuration,
     onInteractChange(active) {
@@ -4458,6 +4484,12 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
     emptyState.style.display = "none";
     currentDuration = playbackState.durationMs;
     lastIsPlaying = playbackState.isPlaying;
+    const canUseTransport = supportsMiniPlayerTransport();
+    controls.hidden = !canUseTransport;
+    prevBtn.disabled = !canUseTransport;
+    playPauseBtn.disabled = !canUseTransport;
+    nextBtn.disabled = !canUseTransport;
+    volumeRow.hidden = true;
     syncedLyricsModel.setPlayback({
       trackUri: playbackState.trackUri,
       progressMs: isProgressScrubbing ? lastProgressMs : playbackState.progressMs,

@@ -440,16 +440,26 @@ export function createMiniPlayerUI(
 
   // ─── Event handlers ────────────────────────────────────────────────
 
+  // The server-side Jukebox and Feishin Remote do not expose the complete
+  // mini-player control surface. Keep those commands in the full player and
+  // make the compact popup display-only for either remote source.
+  function supportsMiniPlayerTransport(): boolean {
+    return currentState?.source !== "feishin" && currentState?.source !== "jukebox";
+  }
+
   prevBtn.addEventListener("click", (e) => {
     e.stopPropagation();
+    if (!supportsMiniPlayerTransport()) return;
     sendToBackend({ type: "previous" });
   });
   nextBtn.addEventListener("click", (e) => {
     e.stopPropagation();
+    if (!supportsMiniPlayerTransport()) return;
     sendToBackend({ type: "next" });
   });
   playPauseBtn.addEventListener("click", (e) => {
     e.stopPropagation();
+    if (!supportsMiniPlayerTransport()) return;
     sendToBackend({ type: isPlaying ? "pause" : "play" });
   });
   expandBtn.addEventListener("click", (e) => {
@@ -680,8 +690,14 @@ export function createMiniPlayerUI(
 
     header.style.display = "";
     progressRow.style.display = "";
+    const canUseTransport = supportsMiniPlayerTransport();
     controls.style.display = "";
-    volumeRow.style.display = "";
+    controls.hidden = !canUseTransport;
+    prevBtn.disabled = !canUseTransport;
+    playPauseBtn.disabled = !canUseTransport;
+    nextBtn.disabled = !canUseTransport;
+    // Neither remote integration offers a mini-player volume endpoint.
+    volumeRow.hidden = true;
     emptyState.style.display = "none";
 
     if (state.deviceName) {

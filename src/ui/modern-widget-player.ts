@@ -595,9 +595,22 @@ export function createModernWidgetPlayerUI(
     }
   }
 
-  prevBtn.addEventListener("click", () => sendToBackend({ type: "previous" }));
-  nextBtn.addEventListener("click", () => sendToBackend({ type: "next" }));
-  playPauseBtn.addEventListener("click", () => sendToBackend({ type: state?.isPlaying ? "pause" : "play" }));
+  // The full player owns remote transport. The mini player is deliberately
+  // display-only for Jukebox and Feishin, whose compact-control capabilities
+  // do not include this complete transport/volume surface.
+  function supportsMiniPlayerTransport(): boolean {
+    return state?.source !== "feishin" && state?.source !== "jukebox";
+  }
+
+  prevBtn.addEventListener("click", () => {
+    if (supportsMiniPlayerTransport()) sendToBackend({ type: "previous" });
+  });
+  nextBtn.addEventListener("click", () => {
+    if (supportsMiniPlayerTransport()) sendToBackend({ type: "next" });
+  });
+  playPauseBtn.addEventListener("click", () => {
+    if (supportsMiniPlayerTransport()) sendToBackend({ type: state?.isPlaying ? "pause" : "play" });
+  });
 
   const cleanupProgressCommit = bindProgressCommitOnRelease(progressBar, {
     getMaxValue: () => currentDuration,
@@ -680,6 +693,13 @@ export function createModernWidgetPlayerUI(
 
     currentDuration = playbackState.durationMs;
     lastIsPlaying = playbackState.isPlaying;
+    const canUseTransport = supportsMiniPlayerTransport();
+    controls.hidden = !canUseTransport;
+    prevBtn.disabled = !canUseTransport;
+    playPauseBtn.disabled = !canUseTransport;
+    nextBtn.disabled = !canUseTransport;
+    // Neither remote integration offers a mini-player volume endpoint.
+    volumeRow.hidden = true;
     syncedLyricsModel.setPlayback({
       trackUri: playbackState.trackUri,
       progressMs: isProgressScrubbing ? lastProgressMs : playbackState.progressMs,
