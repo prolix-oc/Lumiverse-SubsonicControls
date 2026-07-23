@@ -1,6 +1,8 @@
+import type { IntegrationType } from "../types";
+
 export interface SettingsUI {
   root: HTMLElement;
-  update(connected: boolean, serverUrl: string, username: string, hasPassword: boolean, enableJukebox: boolean, jukeboxUnavailableReason: string | null): void;
+  update(connected: boolean, integration: IntegrationType, serverUrl: string, username: string, hasPassword: boolean, enableJukebox: boolean, jukeboxUnavailableReason: string | null): void;
   setConnecting(): void;
   destroy(): void;
 }
@@ -18,6 +20,16 @@ export function createSettingsUI(sendToBackend: (message: unknown) => void): Set
 
   const body = document.createElement("div");
   body.className = "spotify-settings-card-body";
+  const integrationLabel = document.createElement("label");
+  integrationLabel.className = "spotify-settings-label";
+  integrationLabel.textContent = "Connection type";
+  const integration = document.createElement("select");
+  integration.className = "spotify-input";
+  for (const [value, label] of [["subsonic", "Subsonic / OpenSubsonic"], ["feishin", "Feishin Desktop Remote"]]) {
+    const option = document.createElement("option"); option.value = value; option.textContent = label; integration.appendChild(option);
+  }
+  integrationLabel.appendChild(integration);
+  body.appendChild(integrationLabel);
   const makeField = (label: string, type: string, placeholder: string) => {
     const wrapper = document.createElement("label");
     wrapper.className = "spotify-settings-label";
@@ -58,14 +70,26 @@ export function createSettingsUI(sendToBackend: (message: unknown) => void): Set
   root.append(header, body);
   let isConnected = false;
 
-  function update(connected: boolean, url: string, user: string, hasPassword: boolean, enableJukebox: boolean, jukeboxUnavailableReason: string | null) {
+  function updateTypeCopy() {
+    const isFeishin = integration.value === "feishin";
+    serverUrl.previousSibling!.textContent = isFeishin ? "Feishin Remote URL" : "Server URL";
+    serverUrl.placeholder = isFeishin ? "http://192.168.1.20:4333" : "https://music.example.com (or …/rest)";
+    username.placeholder = isFeishin ? "Optional Remote username" : "Subsonic username";
+    password.placeholder = isFeishin ? "Optional Remote password" : "Subsonic password";
+    jukeboxLabel.style.display = isFeishin ? "none" : "";
+  }
+  integration.onchange = updateTypeCopy;
+
+  function update(connected: boolean, connectionType: IntegrationType, url: string, user: string, hasPassword: boolean, enableJukebox: boolean, jukeboxUnavailableReason: string | null) {
     isConnected = connected;
+    integration.value = connectionType;
     if (url) serverUrl.value = url;
     if (user) username.value = user;
     jukebox.checked = enableJukebox;
     jukeboxUnavailable.textContent = jukeboxUnavailableReason || "";
     jukeboxUnavailable.style.display = jukeboxUnavailableReason ? "" : "none";
-    for (const input of [serverUrl, username, password, jukebox] as HTMLInputElement[]) input.disabled = connected;
+    updateTypeCopy();
+    for (const input of [integration, serverUrl, username, password, jukebox] as HTMLInputElement[]) input.disabled = connected;
     password.value = "";
     password.placeholder = hasPassword ? "Saved securely (re-enter to change)" : "Subsonic password";
     button.textContent = connected ? "Disconnect" : "Connect";
@@ -79,15 +103,16 @@ export function createSettingsUI(sendToBackend: (message: unknown) => void): Set
     const url = serverUrl.value.trim();
     const user = username.value.trim();
     const pass = password.value;
-    if (!url || !user || !pass) {
-      status.innerHTML = '<span class="spotify-status-dot disconnected"></span><span style="color:#e74c3c">Server URL, username and password are required</span>';
+    const isFeishin = integration.value === "feishin";
+    if (!url || (!isFeishin && (!user || !pass))) {
+      status.innerHTML = `<span class="spotify-status-dot disconnected"></span><span style="color:#e74c3c">${isFeishin ? "Feishin Remote URL is required" : "Server URL, username and password are required"}</span>`;
       return;
     }
     button.disabled = true;
     button.textContent = "Connecting…";
-    sendToBackend({ type: "connect", serverUrl: url, username: user, password: pass, enableJukebox: jukebox.checked });
+    sendToBackend({ type: "connect", integration: integration.value as IntegrationType, serverUrl: url, username: user, password: pass, enableJukebox: jukebox.checked });
   });
 
-  update(false, "", "", false, false, null);
+  update(false, "subsonic", "", "", false, false, null);
   return { root, update, setConnecting() { button.disabled = true; button.textContent = "Connecting…"; }, destroy() { root.remove(); } };
 }

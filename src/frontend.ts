@@ -1,5 +1,6 @@
 import type { SpindleFrontendContext, SpindleFloatWidgetHandle } from "lumiverse-spindle-types";
-import type { AlbumColors, BackendToFrontend, FrontendToBackend, MiniPlayerStyle, PlaybackState } from "./types";
+import type { AlbumColors, BackendToFrontend, FrontendToBackend, IntegrationType, MiniPlayerStyle, PlaybackState } from "./types";
+import { FeishinRemoteClient } from "./feishin-remote";
 import { SPOTIFY_WIDGET_CSS } from "./ui/spotify-widget-styles";
 import { createSettingsUI } from "./ui/settings";
 import { createNowPlayingUI } from "./ui/now-playing";
@@ -142,7 +143,16 @@ export function setup(ctx: SpindleFrontendContext) {
     });
   }
 
-  const settings = createSettingsUI(send);
+  let integration: IntegrationType = "subsonic";
+  let feishin: FeishinRemoteClient | null = null;
+  let pendingFeishinCredentials: { serverUrl: string; username: string; password: string } | null = null;
+  const settings = createSettingsUI((message) => {
+    const candidate = message as { type?: string; integration?: IntegrationType; serverUrl?: string; username?: string; password?: string };
+    if (candidate.type === "connect" && candidate.integration === "feishin") {
+      pendingFeishinCredentials = { serverUrl: candidate.serverUrl || "", username: candidate.username || "", password: candidate.password || "" };
+    }
+    send(message);
+  });
   const settingsMount = ctx.ui.mount("settings_extensions");
   settingsMount.appendChild(settings.root);
   cleanups.push(() => settings.destroy());
@@ -177,7 +187,14 @@ export function setup(ctx: SpindleFrontendContext) {
   });
 
   const nowPlaying = createNowPlayingUI();
-  const controls = createControlsUI(send);
+  const sendPlayerCommand = (message: { type: "play" | "pause" | "next" | "previous"; trackUri?: string }) => {
+    if (integration === "feishin") {
+      feishin?.send(message.type);
+      return;
+    }
+    send(message);
+  };
+  const controls = createControlsUI(sendPlayerCommand);
   const search = createSearchUI(send);
   const lyrics = createLyricsUI();
   panel.append(nowPlaying.root, controls.root, search.root, lyrics.root);
@@ -187,6 +204,10 @@ export function setup(ctx: SpindleFrontendContext) {
   let currentState: PlaybackState | null = null;
   let lyricsTrackId: string | null = null;
   let jukeboxEnabled = false;
+  let configuredServerUrl = "";
+  let configuredUsername = "";
+  let configuredHasPassword = false;
+  let configuredJukeboxUnavailableReason: string | null = null;
   type ArtShape = "circle" | "squircle";
   type SizeMode = "small" | "medium" | "large" | "custom";
   const DEFAULT_SIZE_PRESETS: Record<Exclude<SizeMode, "custom">, number> = { small: 36, medium: 48, large: 64 };
@@ -684,17 +705,42 @@ export function setup(ctx: SpindleFrontendContext) {
     const message = raw as BackendToFrontend;
     switch (message.type) {
       case "config":
+        integration = message.integration;
         connected = message.connected;
         jukeboxEnabled = message.enableJukebox;
-        settings.update(message.connected, message.serverUrl, message.username, message.hasPassword, message.enableJukebox, message.jukeboxUnavailableReason);
-        controls.update(currentState, connected, jukeboxEnabled);
+        configuredServerUrl = message.serverUrl;
+        configuredUsername = message.username;
+        configuredHasPassword = message.hasPassword;
+        configuredJukeboxUnavailableReason = message.jukeboxUnavailableReason;
+        settings.update(message.connected, message.integration, message.serverUrl, message.username, message.hasPassword, message.enableJukebox, message.jukeboxUnavailableReason);
+        if (message.integration === "feishin" && message.serverUrl) {
+          if (!feishin) {
+            feishin = new FeishinRemoteClient(
+              (state, isConnected) => send({ type: "feishin_state", playbackState: state, connected: isConnected }),
+              (error) => console.warn("[Subsonic Controls]", error),
+            );
+          }
+          const credentials = pendingFeishinCredentials?.serverUrl === message.serverUrl
+            ? pendingFeishinCredentials
+            : { username: message.username, password: "" };
+          pendingFeishinCredentials = null;
+          feishin.connect(message.serverUrl, credentials.username, credentials.password);
+        } else {
+          feishin?.disconnect();
+          feishin = null;
+        }
+        search.setAvailable(message.integration === "subsonic");
+        controls.update(currentState, connected, message.integration === "feishin" || jukeboxEnabled, message.integration === "feishin" ? "Feishin Controls" : "Jukebox Controls");
         syncWidget();
         break;
       case "state":
         connected = message.connected;
         currentState = message.playbackState;
+        if (integration === "feishin") {
+          settings.update(connected, integration, configuredServerUrl, configuredUsername, configuredHasPassword, false, configuredJukeboxUnavailableReason);
+        }
         nowPlaying.update(currentState, connected);
-        controls.update(currentState, connected, jukeboxEnabled);
+        controls.update(currentState, connected, integration === "feishin" || jukeboxEnabled, integration === "feishin" ? "Feishin Controls" : "Jukebox Controls");
         lyrics.updatePlayback(currentState);
         if (currentState?.trackUri && currentState.trackUri !== lyricsTrackId) {
           lyricsTrackId = currentState.trackUri;
@@ -734,7 +780,10 @@ export function setup(ctx: SpindleFrontendContext) {
         send({ type: "get_state" });
         break;
       case "disconnected":
+        feishin?.disconnect(); feishin = null;
         connected = false; currentState = null; lyricsTrackId = null; jukeboxEnabled = false;
+        settings.update(false, integration, configuredServerUrl, configuredUsername, configuredHasPassword, false, null);
+        search.setAvailable(integration === "subsonic");
         lastThemeArtUrl = null;
         clearAlbumTheme();
         nowPlaying.update(null, false); controls.update(null, false, false); lyrics.clear();
@@ -789,7 +838,7 @@ export function setup(ctx: SpindleFrontendContext) {
     jukeboxEnabled = false;
     lastThemeArtUrl = null;
     clearAlbumTheme();
-    settings.update(false, "", "", false, false, null);
+    settings.update(false, "subsonic", "", "", false, false, null);
     nowPlaying.update(null, false);
     controls.update(null, false, false);
     lyrics.clear();
@@ -797,6 +846,7 @@ export function setup(ctx: SpindleFrontendContext) {
   });
   cleanups.push(permissionChange);
   cleanups.push(() => {
+    feishin?.disconnect();
     cancelPendingThemeClear();
     themeApplySeq += 1;
     for (const [requestId, pending] of pendingPaletteImages) {

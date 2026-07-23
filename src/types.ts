@@ -1,8 +1,9 @@
 export type FrontendToBackend =
   | { type: "get_state" }
   | { type: "get_config" }
-  | { type: "connect"; serverUrl: string; username: string; password: string; enableJukebox: boolean }
+  | { type: "connect"; integration: IntegrationType; serverUrl: string; username: string; password: string; enableJukebox: boolean }
   | { type: "disconnect" }
+  | { type: "feishin_state"; connected: boolean; playbackState: PlaybackState | null }
   | { type: "play"; trackUri?: string }
   | { type: "pause" }
   | { type: "next" }
@@ -15,7 +16,7 @@ export type FrontendToBackend =
 
 export type BackendToFrontend =
   | { type: "state"; playbackState: PlaybackState | null; connected: boolean }
-  | { type: "config"; serverUrl: string; username: string; hasPassword: boolean; enableJukebox: boolean; jukeboxUnavailableReason: string | null; connected: boolean }
+  | { type: "config"; integration: IntegrationType; serverUrl: string; username: string; hasPassword: boolean; enableJukebox: boolean; jukeboxUnavailableReason: string | null; connected: boolean }
   | { type: "search_results"; results: SearchResult[] }
   | { type: "chat_songs"; chatId: string; entries: MessageSongEntry[] }
   | { type: "message_song"; chatId: string; messageId: string; swipeId: number; snapshot: SongSnapshot }
@@ -35,7 +36,7 @@ export interface PlaybackState {
   trackUri: string;
   /** Whether the server supplied a real playback position (OpenSubsonic playbackReport). */
   positionKnown?: boolean;
-  source: "jukebox" | "now_playing";
+  source: "jukebox" | "now_playing" | "feishin";
   // Kept optional because the shared Spotify player components can render
   // these capabilities when an integration provides them. Subsonic's
   // Jukebox API does not currently expose either value.
@@ -96,8 +97,11 @@ export interface AlbumColors {
 }
 
 export interface SubsonicConfig {
+  integration: IntegrationType;
   serverUrl: string;
   username: string;
   password: string;
   enableJukebox: boolean;
 }
+
+export type IntegrationType = "subsonic" | "feishin";

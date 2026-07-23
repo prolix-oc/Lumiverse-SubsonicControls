@@ -322,15 +322,16 @@ function send(message, userId) {
   spindle.sendToFrontend(message, userId);
 }
 async function loadConfig(userId) {
-  const stored = await spindle.userStorage.getJson("config.json", { fallback: { serverUrl: "", username: "", enableJukebox: false }, userId });
+  const stored = await spindle.userStorage.getJson("config.json", { fallback: { integration: "subsonic", serverUrl: "", username: "", enableJukebox: false }, userId });
+  const integration = stored.integration === "feishin" ? "feishin" : "subsonic";
   const password = await spindle.enclave.get("subsonic_password", userId);
-  if (!stored.serverUrl || !stored.username || !password)
+  if (!stored.serverUrl || integration === "subsonic" && (!stored.username || !password))
     return null;
-  return { ...stored, password };
+  return { ...stored, integration, password: password || "" };
 }
 async function loadUser(userId) {
   const config = await loadConfig(userId);
-  setConfig(userId, config);
+  setConfig(userId, config?.integration === "subsonic" ? config : null);
   setActiveUser(userId);
   activeUserId2 = userId;
   if (config && await verifyConfiguredJukebox(config, userId))
@@ -377,9 +378,9 @@ function syncLyricsForTrackChange(userId, previousTrackUri, state) {
   getLyricsForState(state, userId);
 }
 async function saveConfig(config, userId) {
-  await spindle.userStorage.setJson("config.json", { serverUrl: config.serverUrl, username: config.username, enableJukebox: config.enableJukebox }, { userId });
+  await spindle.userStorage.setJson("config.json", { integration: config.integration, serverUrl: config.serverUrl, username: config.username, enableJukebox: config.enableJukebox }, { userId });
   await spindle.enclave.put("subsonic_password", config.password, userId);
-  setConfig(userId, config);
+  setConfig(userId, config.integration === "subsonic" ? config : null);
 }
 async function verifyConfiguredJukebox(config, userId) {
   if (!config.enableJukebox) {
@@ -411,6 +412,13 @@ function stopPolling(userId) {
   pollingUsers.delete(userId);
 }
 async function pushState(userId) {
+  const config = await loadConfig(userId);
+  if (config?.integration === "feishin") {
+    const state2 = stateByUser.get(userId) || null;
+    pushPlaybackMacros(state2);
+    send({ type: "state", playbackState: state2, connected: true }, userId);
+    return state2;
+  }
   if (!isConnected(userId)) {
     pushPlaybackMacros(null);
     send({ type: "state", playbackState: null, connected: false }, userId);
@@ -450,7 +458,7 @@ function startPolling(userId) {
 }
 async function sendConfig(userId) {
   const config = await loadConfig(userId);
-  send({ type: "config", serverUrl: config?.serverUrl || "", username: config?.username || "", hasPassword: !!config?.password, enableJukebox: !!config?.enableJukebox, jukeboxUnavailableReason: jukeboxUnavailableReasons.get(userId) || null, connected: !!config }, userId);
+  send({ type: "config", integration: config?.integration || "subsonic", serverUrl: config?.serverUrl || "", username: config?.username || "", hasPassword: !!config?.password, enableJukebox: !!config?.enableJukebox, jukeboxUnavailableReason: jukeboxUnavailableReasons.get(userId) || null, connected: !!config }, userId);
 }
 async function updateTheme(colors, userId) {
   if (!colors) {
@@ -476,15 +484,18 @@ spindle.onFrontendMessage(async (raw, userId) => {
         startPolling(userId);
         break;
       case "connect": {
-        const config = { serverUrl: message.serverUrl, username: message.username, password: message.password, enableJukebox: message.enableJukebox };
-        setConfig(userId, config);
-        await ping(userId);
+        const config = { integration: message.integration, serverUrl: message.serverUrl, username: message.username, password: message.password, enableJukebox: message.integration === "subsonic" && message.enableJukebox };
+        setConfig(userId, config.integration === "subsonic" ? config : null);
+        if (config.integration === "subsonic")
+          await ping(userId);
         jukeboxAvailabilityChecked.delete(userId);
-        await verifyConfiguredJukebox(config, userId);
+        if (config.integration === "subsonic")
+          await verifyConfiguredJukebox(config, userId);
         await saveConfig(config, userId);
         send({ type: "connected" }, userId);
         await sendConfig(userId);
-        startPolling(userId);
+        if (config.integration === "subsonic")
+          startPolling(userId);
         break;
       }
       case "disconnect":
@@ -502,6 +513,13 @@ spindle.onFrontendMessage(async (raw, userId) => {
         await updateTheme(null, userId);
         send({ type: "disconnected" }, userId);
         send({ type: "state", playbackState: null, connected: false }, userId);
+        break;
+      case "feishin_state":
+        stateByUser.set(userId, message.playbackState);
+        stateObservedAt.set(userId, Date.now());
+        pushPlaybackMacros(message.playbackState);
+        syncLyricsForTrackChange(userId, null, message.playbackState);
+        send({ type: "state", playbackState: message.playbackState, connected: message.connected }, userId);
         break;
       case "play":
         await play(message.trackUri, userId);
@@ -529,6 +547,11 @@ spindle.onFrontendMessage(async (raw, userId) => {
         await sendChatSongs(message.chatId, userId);
         break;
       case "get_lyrics": {
+        const config = await loadConfig(userId);
+        if (config?.integration === "feishin") {
+          send({ type: "lyrics", trackUri: stateByUser.get(userId)?.trackUri || "", plainLyrics: null, syncedLyrics: null, instrumental: false }, userId);
+          break;
+        }
         const state = stateByUser.get(userId) || await pushState(userId);
         const lyrics = state ? await getLyricsForState(state, userId) : null;
         send({

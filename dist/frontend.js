@@ -1,3 +1,167 @@
+// src/feishin-remote.ts
+function asRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function text(value, fallback = "") {
+  return typeof value === "string" ? value : fallback;
+}
+function number(value, fallback = 0) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+function webSocketUrl(value) {
+  const url = new URL(value.includes("://") ? value : `http://${value}`);
+  if (url.protocol === "http:")
+    url.protocol = "ws:";
+  else if (url.protocol === "https:")
+    url.protocol = "wss:";
+  if (url.protocol !== "ws:" && url.protocol !== "wss:")
+    throw new Error("Feishin Remote URL must use HTTP, HTTPS, WS, or WSS.");
+  return url.toString();
+}
+
+class FeishinRemoteClient {
+  onState;
+  onError;
+  socket = null;
+  state = null;
+  status = "stopped";
+  positionSeconds = 0;
+  volume = null;
+  reconnectTimer = null;
+  reconnectAttempt = 0;
+  stopped = true;
+  config = null;
+  constructor(onState, onError) {
+    this.onState = onState;
+    this.onError = onError;
+  }
+  connect(url, username, password) {
+    const normalizedUrl = webSocketUrl(url);
+    if (this.config?.url === normalizedUrl && this.socket?.readyState === WebSocket.OPEN)
+      return;
+    this.disconnect(false);
+    this.stopped = false;
+    this.config = { url: normalizedUrl, username, password };
+    this.reconnectAttempt = 0;
+    this.open();
+  }
+  disconnect(clear = true) {
+    this.stopped = true;
+    if (this.reconnectTimer)
+      clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    const socket = this.socket;
+    this.socket = null;
+    socket?.close(1000, "Disconnected by user");
+    if (clear) {
+      this.config = null;
+      this.state = null;
+      this.onState(null, false);
+    }
+  }
+  send(event, data = {}) {
+    if (this.socket?.readyState !== WebSocket.OPEN)
+      return this.onError("Feishin Remote is not connected.");
+    this.socket.send(JSON.stringify({ event, ...data }));
+  }
+  open() {
+    const config = this.config;
+    if (!config || this.stopped)
+      return;
+    try {
+      const socket = new WebSocket(config.url);
+      this.socket = socket;
+      socket.onopen = () => {
+        if (socket !== this.socket)
+          return;
+        this.reconnectAttempt = 0;
+        this.onState(this.state, true);
+        if (config.username || config.password) {
+          socket.send(JSON.stringify({ event: "authenticate", header: `Basic ${btoa(`${config.username}:${config.password}`)}` }));
+        }
+      };
+      socket.onmessage = (event) => this.receive(event.data);
+      socket.onerror = () => this.onError("Feishin Remote connection failed.");
+      socket.onclose = () => {
+        if (socket !== this.socket)
+          return;
+        this.socket = null;
+        this.state = null;
+        this.onState(null, false);
+        this.scheduleReconnect();
+      };
+    } catch (error) {
+      this.onError(error instanceof Error ? error.message : "Could not connect to Feishin Remote.");
+      this.scheduleReconnect();
+    }
+  }
+  scheduleReconnect() {
+    if (this.stopped || !this.config || this.reconnectTimer)
+      return;
+    const seconds = [2, 4, 8, 16, 30][Math.min(this.reconnectAttempt++, 4)];
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.open();
+    }, seconds * 1000);
+  }
+  receive(raw) {
+    try {
+      const message = JSON.parse(typeof raw === "string" ? raw : "");
+      const event = text(message.event);
+      if (event === "error")
+        return this.onError(text(message.data, "Feishin Remote error."));
+      const data = asRecord(message.data);
+      if (event === "state")
+        this.replaceState(data);
+      else if (event === "song")
+        this.setSong(data);
+      else if (event === "playback")
+        this.status = text(message.data, this.status);
+      else if (event === "position")
+        this.positionSeconds = number(message.data, this.positionSeconds);
+      else if (event === "volume")
+        this.volume = number(message.data, this.volume ?? 0);
+      else if (event === "proxy" && this.state && typeof message.data === "string")
+        this.state = { ...this.state, albumArtUrl: `data:image/jpeg;base64,${message.data}` };
+      this.publish();
+    } catch {
+      this.onError("Feishin sent an invalid Remote response.");
+    }
+  }
+  replaceState(data) {
+    this.status = text(data.status, "stopped");
+    this.positionSeconds = number(data.position);
+    this.volume = number(data.volume);
+    this.setSong(asRecord(data.song), false);
+  }
+  setSong(song, publish = true) {
+    const id = text(song.id);
+    this.state = id ? {
+      trackUri: id,
+      trackName: text(song.name, "Unknown track"),
+      artistName: text(song.artistName, "Unknown artist"),
+      albumName: text(song.album, "Unknown album"),
+      albumArtUrl: null,
+      durationMs: Math.max(0, number(song.duration)),
+      progressMs: Math.max(0, this.positionSeconds * 1000),
+      positionKnown: true,
+      isPlaying: this.status.toLowerCase() === "playing",
+      source: "feishin",
+      deviceName: "Feishin Desktop",
+      volume: this.volume
+    } : null;
+    if (id)
+      this.send("proxy");
+    if (publish)
+      this.publish();
+  }
+  publish() {
+    if (this.state)
+      this.state = { ...this.state, isPlaying: this.status.toLowerCase() === "playing", progressMs: Math.max(0, this.positionSeconds * 1000), volume: this.volume };
+    this.onState(this.state, this.socket?.readyState === WebSocket.OPEN);
+  }
+}
+
 // src/ui/spotify-widget-styles.ts
 var SPOTIFY_WIDGET_CSS = `
 @property --spotify-modern-marquee-left-fade {
@@ -2222,6 +2386,19 @@ function createSettingsUI(sendToBackend) {
   header.append(title, status);
   const body = document.createElement("div");
   body.className = "spotify-settings-card-body";
+  const integrationLabel = document.createElement("label");
+  integrationLabel.className = "spotify-settings-label";
+  integrationLabel.textContent = "Connection type";
+  const integration = document.createElement("select");
+  integration.className = "spotify-input";
+  for (const [value, label] of [["subsonic", "Subsonic / OpenSubsonic"], ["feishin", "Feishin Desktop Remote"]]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    integration.appendChild(option);
+  }
+  integrationLabel.appendChild(integration);
+  body.appendChild(integrationLabel);
   const makeField = (label, type, placeholder) => {
     const wrapper = document.createElement("label");
     wrapper.className = "spotify-settings-label";
@@ -2259,8 +2436,18 @@ function createSettingsUI(sendToBackend) {
   body.appendChild(actions);
   root.append(header, body);
   let isConnected = false;
-  function update(connected, url, user, hasPassword, enableJukebox, jukeboxUnavailableReason) {
+  function updateTypeCopy() {
+    const isFeishin = integration.value === "feishin";
+    serverUrl.previousSibling.textContent = isFeishin ? "Feishin Remote URL" : "Server URL";
+    serverUrl.placeholder = isFeishin ? "http://192.168.1.20:4333" : "https://music.example.com (or …/rest)";
+    username.placeholder = isFeishin ? "Optional Remote username" : "Subsonic username";
+    password.placeholder = isFeishin ? "Optional Remote password" : "Subsonic password";
+    jukeboxLabel.style.display = isFeishin ? "none" : "";
+  }
+  integration.onchange = updateTypeCopy;
+  function update(connected, connectionType, url, user, hasPassword, enableJukebox, jukeboxUnavailableReason) {
     isConnected = connected;
+    integration.value = connectionType;
     if (url)
       serverUrl.value = url;
     if (user)
@@ -2268,7 +2455,8 @@ function createSettingsUI(sendToBackend) {
     jukebox.checked = enableJukebox;
     jukeboxUnavailable.textContent = jukeboxUnavailableReason || "";
     jukeboxUnavailable.style.display = jukeboxUnavailableReason ? "" : "none";
-    for (const input of [serverUrl, username, password, jukebox])
+    updateTypeCopy();
+    for (const input of [integration, serverUrl, username, password, jukebox])
       input.disabled = connected;
     password.value = "";
     password.placeholder = hasPassword ? "Saved securely (re-enter to change)" : "Subsonic password";
@@ -2285,15 +2473,16 @@ function createSettingsUI(sendToBackend) {
     const url = serverUrl.value.trim();
     const user = username.value.trim();
     const pass = password.value;
-    if (!url || !user || !pass) {
-      status.innerHTML = '<span class="spotify-status-dot disconnected"></span><span style="color:#e74c3c">Server URL, username and password are required</span>';
+    const isFeishin = integration.value === "feishin";
+    if (!url || !isFeishin && (!user || !pass)) {
+      status.innerHTML = `<span class="spotify-status-dot disconnected"></span><span style="color:#e74c3c">${isFeishin ? "Feishin Remote URL is required" : "Server URL, username and password are required"}</span>`;
       return;
     }
     button.disabled = true;
     button.textContent = "Connecting…";
-    sendToBackend({ type: "connect", serverUrl: url, username: user, password: pass, enableJukebox: jukebox.checked });
+    sendToBackend({ type: "connect", integration: integration.value, serverUrl: url, username: user, password: pass, enableJukebox: jukebox.checked });
   });
-  update(false, "", "", false, false, null);
+  update(false, "subsonic", "", "", false, false, null);
   return { root, update, setConnecting() {
     button.disabled = true;
     button.textContent = "Connecting…";
@@ -2443,14 +2632,14 @@ function createNowPlayingUI() {
     if (!connected) {
       body.style.display = "none";
       empty.style.display = "";
-      empty.textContent = "Connect to a Subsonic-compatible server to get started";
+      empty.textContent = "Connect a music source to get started";
       art.setUrl(null);
       return;
     }
     if (!state) {
       body.style.display = "none";
       empty.style.display = "";
-      empty.textContent = "No active playback reported by this server";
+      empty.textContent = "No active playback reported";
       art.setUrl(null);
       return;
     }
@@ -2459,7 +2648,7 @@ function createNowPlayingUI() {
     track.textContent = state.trackName;
     artist.textContent = state.artistName;
     album.textContent = state.albumName;
-    source.textContent = state.source === "jukebox" ? "Server Jukebox" : "Server now playing";
+    source.textContent = state.source === "jukebox" ? "Server Jukebox" : state.source === "feishin" ? "Feishin Desktop" : "Server now playing";
     art.setUrl(getTrackScopedArtUrl(state.albumArtUrl, state.trackUri));
   }, destroy() {
     art.destroy();
@@ -2477,7 +2666,7 @@ function createControlsUI(send) {
   root.className = "spotify-section";
   const title = document.createElement("h3");
   title.className = "spotify-section-title";
-  title.textContent = "Jukebox Controls";
+  title.textContent = "Player Controls";
   const row = document.createElement("div");
   row.className = "spotify-controls";
   const button = (icon, className = "") => {
@@ -2495,8 +2684,9 @@ function createControlsUI(send) {
   playPause.onclick = () => send({ type: isPlaying ? "pause" : "play" });
   row.append(previous, playPause, next);
   root.append(title, row);
-  return { root, update(state, connected, jukeboxEnabled) {
-    root.style.display = connected && jukeboxEnabled ? "" : "none";
+  return { root, update(state, connected, enabled, titleText = "Player Controls") {
+    root.style.display = connected && enabled ? "" : "none";
+    title.textContent = titleText;
     isPlaying = !!state?.isPlaying;
     playPause.innerHTML = isPlaying ? PAUSE : PLAY;
   }, destroy() {
@@ -2576,7 +2766,11 @@ function createSearchUI(send) {
       list.appendChild(item);
     }
   };
-  return { root, setResults, destroy() {
+  return { root, setResults, setAvailable(available) {
+    root.style.display = available ? "" : "none";
+    if (!available)
+      list.innerHTML = "";
+  }, destroy() {
     if (timer)
       clearTimeout(timer);
     root.remove();
@@ -2604,9 +2798,9 @@ function parseSyncedLyrics(value) {
     const timestamps = [...line.matchAll(/\[([^\]]+)\]/g)].map((match) => parseTimestamp(match[1])).filter((timeMs) => timeMs !== null);
     if (timestamps.length === 0)
       continue;
-    const text = line.replace(/(?:\[[^\]]+\])+/g, "").trim();
+    const text2 = line.replace(/(?:\[[^\]]+\])+/g, "").trim();
     for (const timeMs of timestamps)
-      parsed.push({ timeMs, text });
+      parsed.push({ timeMs, text: text2 });
   }
   const grouped = [];
   for (const line of parsed.sort((a, b) => a.timeMs - b.timeMs)) {
@@ -2620,12 +2814,12 @@ function parseSyncedLyrics(value) {
   }
   return grouped;
 }
-function getLineDisplayText(text) {
-  return text || EMPTY_SYNCED_LINE_SYMBOL;
+function getLineDisplayText(text2) {
+  return text2 || EMPTY_SYNCED_LINE_SYMBOL;
 }
-function shouldReserveScaleGutter(text) {
-  return !text.includes(`
-`) && text.length >= 36;
+function shouldReserveScaleGutter(text2) {
+  return !text2.includes(`
+`) && text2.length >= 36;
 }
 function createSyncedLyricsModel(maxLines) {
   let lyrics = [];
@@ -2894,10 +3088,10 @@ function createLyricsUI() {
   function renderPlainLyrics(value) {
     stopLoadingState();
     body.className = "spotify-lyrics-body spotify-lyrics-has-content";
-    const text = document.createElement("div");
-    text.className = "spotify-lyrics-text spotify-lyrics-text-enter";
-    text.textContent = value;
-    body.appendChild(text);
+    const text2 = document.createElement("div");
+    text2.className = "spotify-lyrics-text spotify-lyrics-text-enter";
+    text2.textContent = value;
+    body.appendChild(text2);
   }
   function update(trackUri, plainLyrics, syncedLyrics, instrumental) {
     stopTicking();
@@ -4907,7 +5101,16 @@ function setup(ctx) {
       });
     });
   }
-  const settings = createSettingsUI(send);
+  let integration = "subsonic";
+  let feishin = null;
+  let pendingFeishinCredentials = null;
+  const settings = createSettingsUI((message) => {
+    const candidate = message;
+    if (candidate.type === "connect" && candidate.integration === "feishin") {
+      pendingFeishinCredentials = { serverUrl: candidate.serverUrl || "", username: candidate.username || "", password: candidate.password || "" };
+    }
+    send(message);
+  });
   const settingsMount = ctx.ui.mount("settings_extensions");
   settingsMount.appendChild(settings.root);
   cleanups.push(() => settings.destroy());
@@ -4941,7 +5144,14 @@ function setup(ctx) {
     window.removeEventListener("resize", updateTabHeight);
   });
   const nowPlaying = createNowPlayingUI();
-  const controls = createControlsUI(send);
+  const sendPlayerCommand = (message) => {
+    if (integration === "feishin") {
+      feishin?.send(message.type);
+      return;
+    }
+    send(message);
+  };
+  const controls = createControlsUI(sendPlayerCommand);
   const search = createSearchUI(send);
   const lyrics = createLyricsUI();
   panel.append(nowPlaying.root, controls.root, search.root, lyrics.root);
@@ -4950,6 +5160,10 @@ function setup(ctx) {
   let currentState = null;
   let lyricsTrackId = null;
   let jukeboxEnabled = false;
+  let configuredServerUrl = "";
+  let configuredUsername = "";
+  let configuredHasPassword = false;
+  let configuredJukeboxUnavailableReason = null;
   const DEFAULT_SIZE_PRESETS = { small: 36, medium: 48, large: 64 };
   const MODERN_SIZE_PRESETS = { small: 112, medium: 128, large: 144 };
   const DEFAULT_WIDGET_SIZE_MIN = 24;
@@ -5427,17 +5641,37 @@ function setup(ctx) {
     const message = raw;
     switch (message.type) {
       case "config":
+        integration = message.integration;
         connected = message.connected;
         jukeboxEnabled = message.enableJukebox;
-        settings.update(message.connected, message.serverUrl, message.username, message.hasPassword, message.enableJukebox, message.jukeboxUnavailableReason);
-        controls.update(currentState, connected, jukeboxEnabled);
+        configuredServerUrl = message.serverUrl;
+        configuredUsername = message.username;
+        configuredHasPassword = message.hasPassword;
+        configuredJukeboxUnavailableReason = message.jukeboxUnavailableReason;
+        settings.update(message.connected, message.integration, message.serverUrl, message.username, message.hasPassword, message.enableJukebox, message.jukeboxUnavailableReason);
+        if (message.integration === "feishin" && message.serverUrl) {
+          if (!feishin) {
+            feishin = new FeishinRemoteClient((state, isConnected) => send({ type: "feishin_state", playbackState: state, connected: isConnected }), (error) => console.warn("[Subsonic Controls]", error));
+          }
+          const credentials = pendingFeishinCredentials?.serverUrl === message.serverUrl ? pendingFeishinCredentials : { username: message.username, password: "" };
+          pendingFeishinCredentials = null;
+          feishin.connect(message.serverUrl, credentials.username, credentials.password);
+        } else {
+          feishin?.disconnect();
+          feishin = null;
+        }
+        search.setAvailable(message.integration === "subsonic");
+        controls.update(currentState, connected, message.integration === "feishin" || jukeboxEnabled, message.integration === "feishin" ? "Feishin Controls" : "Jukebox Controls");
         syncWidget();
         break;
       case "state":
         connected = message.connected;
         currentState = message.playbackState;
+        if (integration === "feishin") {
+          settings.update(connected, integration, configuredServerUrl, configuredUsername, configuredHasPassword, false, configuredJukeboxUnavailableReason);
+        }
         nowPlaying.update(currentState, connected);
-        controls.update(currentState, connected, jukeboxEnabled);
+        controls.update(currentState, connected, integration === "feishin" || jukeboxEnabled, integration === "feishin" ? "Feishin Controls" : "Jukebox Controls");
         lyrics.updatePlayback(currentState);
         if (currentState?.trackUri && currentState.trackUri !== lyricsTrackId) {
           lyricsTrackId = currentState.trackUri;
@@ -5480,10 +5714,14 @@ function setup(ctx) {
         send({ type: "get_state" });
         break;
       case "disconnected":
+        feishin?.disconnect();
+        feishin = null;
         connected = false;
         currentState = null;
         lyricsTrackId = null;
         jukeboxEnabled = false;
+        settings.update(false, integration, configuredServerUrl, configuredUsername, configuredHasPassword, false, null);
+        search.setAvailable(integration === "subsonic");
         lastThemeArtUrl = null;
         clearAlbumTheme();
         nowPlaying.update(null, false);
@@ -5546,7 +5784,7 @@ function setup(ctx) {
     jukeboxEnabled = false;
     lastThemeArtUrl = null;
     clearAlbumTheme();
-    settings.update(false, "", "", false, false, null);
+    settings.update(false, "subsonic", "", "", false, false, null);
     nowPlaying.update(null, false);
     controls.update(null, false, false);
     lyrics.clear();
@@ -5554,6 +5792,7 @@ function setup(ctx) {
   });
   cleanups.push(permissionChange);
   cleanups.push(() => {
+    feishin?.disconnect();
     cancelPendingThemeClear();
     themeApplySeq += 1;
     for (const [requestId, pending] of pendingPaletteImages) {

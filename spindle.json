@@ -5,7 +5,7 @@
   "author": "Prolix OCs",
   "github": "",
   "homepage": "https://lumiverse.chat",
-  "description": "Browse a Subsonic-compatible music server, view now playing and lyrics, and control its optional server-side Jukebox.",
+  "description": "Browse a Subsonic server or remotely control a Feishin desktop player.",
   "permissions": ["cors_proxy", "ui_panels", "generation", "chat_mutation"],
   "entry_backend": "dist/backend.js",
   "entry_frontend": "dist/frontend.js",
