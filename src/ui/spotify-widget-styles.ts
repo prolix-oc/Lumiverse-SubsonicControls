@@ -1566,6 +1566,12 @@ export const SPOTIFY_WIDGET_CSS = `
   padding: 0 4px;
 }
 
+/* Neither Jukebox nor Feishin supports mini-player volume control. */
+.spotify-mini-volume-row,
+.spotify-modern-widget-volume-row {
+  display: none !important;
+}
+
 .spotify-mini-volume-icon {
   width: 14px;
   height: 14px;
@@ -2207,4 +2213,3 @@ export const SPOTIFY_WIDGET_CSS = `
 }
 
 `;
-

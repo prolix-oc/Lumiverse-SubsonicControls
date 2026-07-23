@@ -1567,6 +1567,12 @@ var SPOTIFY_WIDGET_CSS = `
   padding: 0 4px;
 }
 
+/* Neither Jukebox nor Feishin supports mini-player volume control. */
+.spotify-mini-volume-row,
+.spotify-modern-widget-volume-row {
+  display: none !important;
+}
+
 .spotify-mini-volume-icon {
   width: 14px;
   height: 14px;
@@ -3741,12 +3747,13 @@ function createMiniPlayerUI(sendToBackend, onExpandClick, getWidgetRect) {
     header.style.display = "";
     progressRow.style.display = "";
     const canUseTransport = supportsMiniPlayerTransport();
-    controls.style.display = "";
+    controls.style.display = canUseTransport ? "flex" : "none";
     controls.hidden = !canUseTransport;
     prevBtn.disabled = !canUseTransport;
     playPauseBtn.disabled = !canUseTransport;
     nextBtn.disabled = !canUseTransport;
     volumeRow.hidden = true;
+    volumeRow.style.display = "none";
     emptyState.style.display = "none";
     if (state.deviceName) {
       deviceName.textContent = state.deviceName;
@@ -4479,17 +4486,17 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
     hero.style.display = "grid";
     progressRow.style.display = "grid";
     lyricsSection.style.display = "grid";
-    controls.style.display = "flex";
-    volumeRow.style.display = "flex";
     emptyState.style.display = "none";
     currentDuration = playbackState.durationMs;
     lastIsPlaying = playbackState.isPlaying;
     const canUseTransport = supportsMiniPlayerTransport();
+    controls.style.display = canUseTransport ? "flex" : "none";
     controls.hidden = !canUseTransport;
     prevBtn.disabled = !canUseTransport;
     playPauseBtn.disabled = !canUseTransport;
     nextBtn.disabled = !canUseTransport;
     volumeRow.hidden = true;
+    volumeRow.style.display = "none";
     syncedLyricsModel.setPlayback({
       trackUri: playbackState.trackUri,
       progressMs: isProgressScrubbing ? lastProgressMs : playbackState.progressMs,

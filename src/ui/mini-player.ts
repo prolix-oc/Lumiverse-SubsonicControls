@@ -690,13 +690,14 @@ export function createMiniPlayerUI(
     header.style.display = "";
     progressRow.style.display = "";
     const canUseTransport = supportsMiniPlayerTransport();
-    controls.style.display = "";
+    controls.style.display = canUseTransport ? "flex" : "none";
     controls.hidden = !canUseTransport;
     prevBtn.disabled = !canUseTransport;
     playPauseBtn.disabled = !canUseTransport;
     nextBtn.disabled = !canUseTransport;
     // Neither remote integration offers a mini-player volume endpoint.
     volumeRow.hidden = true;
+    volumeRow.style.display = "none";
     emptyState.style.display = "none";
 
     if (state.deviceName) {

@@ -686,19 +686,19 @@ export function createModernWidgetPlayerUI(
     hero.style.display = "grid";
     progressRow.style.display = "grid";
     lyricsSection.style.display = "grid";
-    controls.style.display = "flex";
-    volumeRow.style.display = "flex";
     emptyState.style.display = "none";
 
     currentDuration = playbackState.durationMs;
     lastIsPlaying = playbackState.isPlaying;
     const canUseTransport = supportsMiniPlayerTransport();
+    controls.style.display = canUseTransport ? "flex" : "none";
     controls.hidden = !canUseTransport;
     prevBtn.disabled = !canUseTransport;
     playPauseBtn.disabled = !canUseTransport;
     nextBtn.disabled = !canUseTransport;
     // Neither remote integration offers a mini-player volume endpoint.
     volumeRow.hidden = true;
+    volumeRow.style.display = "none";
     syncedLyricsModel.setPlayback({
       trackUri: playbackState.trackUri,
       progressMs: isProgressScrubbing ? lastProgressMs : playbackState.progressMs,
