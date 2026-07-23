@@ -2543,7 +2543,7 @@ function createNowPlayingUI() {
     track.textContent = state.trackName;
     artist.textContent = state.artistName;
     album.textContent = state.albumName;
-    source.textContent = state.source === "jukebox" ? "Server Jukebox" : state.source === "feishin" ? "Feishin Desktop" : "Server now playing";
+    source.textContent = state.source === "jukebox" ? "Server Jukebox" : state.source === "feishin" ? "Feishin Desktop" : state.deviceName ? `Playing on ${state.deviceName}` : "Server now playing";
     art.setUrl(getTrackScopedArtUrl(state.albumArtUrl, state.trackUri));
   }, destroy() {
     art.destroy();

@@ -127,7 +127,8 @@ async function mapState(entry, isPlaying, source, positionMs = 0, userId, positi
   if (!entry?.id)
     return null;
   const track = await mapTrack(entry, userId);
-  return { isPlaying, trackName: track.name, artistName: track.artist, albumName: track.album, albumArtUrl: track.albumArtUrl, progressMs: positionMs, durationMs: track.durationMs, trackUri: track.uri, positionKnown, source };
+  const playerName = typeof entry.playerName === "string" && entry.playerName.trim() ? entry.playerName.trim() : null;
+  return { isPlaying, trackName: track.name, artistName: track.artist, albumName: track.album, albumArtUrl: track.albumArtUrl, progressMs: positionMs, durationMs: track.durationMs, trackUri: track.uri, positionKnown, source, deviceName: playerName };
 }
 async function ping(userId) {
   await request("ping", {}, userId);

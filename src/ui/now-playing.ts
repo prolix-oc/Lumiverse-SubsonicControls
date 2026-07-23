@@ -18,6 +18,6 @@ export function createNowPlayingUI(): NowPlayingUI {
   return { root, update(state, connected) {
     if (!connected) { body.style.display = "none"; empty.style.display = ""; empty.textContent = "Connect a music source to get started"; art.setUrl(null); return; }
     if (!state) { body.style.display = "none"; empty.style.display = ""; empty.textContent = "No active playback reported"; art.setUrl(null); return; }
-    body.style.display = "flex"; empty.style.display = "none"; track.textContent = state.trackName; artist.textContent = state.artistName; album.textContent = state.albumName; source.textContent = state.source === "jukebox" ? "Server Jukebox" : state.source === "feishin" ? "Feishin Desktop" : "Server now playing"; art.setUrl(getTrackScopedArtUrl(state.albumArtUrl, state.trackUri));
+    body.style.display = "flex"; empty.style.display = "none"; track.textContent = state.trackName; artist.textContent = state.artistName; album.textContent = state.albumName; source.textContent = state.source === "jukebox" ? "Server Jukebox" : state.source === "feishin" ? "Feishin Desktop" : state.deviceName ? `Playing on ${state.deviceName}` : "Server now playing"; art.setUrl(getTrackScopedArtUrl(state.albumArtUrl, state.trackUri));
   }, destroy() { art.destroy(); root.remove(); } };
 }

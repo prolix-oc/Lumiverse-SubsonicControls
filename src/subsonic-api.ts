@@ -135,7 +135,8 @@ async function mapTrack(entry: any, userId?: string): Promise<SearchResult> {
 async function mapState(entry: any, isPlaying: boolean, source: PlaybackState["source"], positionMs = 0, userId?: string, positionKnown = true): Promise<PlaybackState | null> {
   if (!entry?.id) return null;
   const track = await mapTrack(entry, userId);
-  return { isPlaying, trackName: track.name, artistName: track.artist, albumName: track.album, albumArtUrl: track.albumArtUrl, progressMs: positionMs, durationMs: track.durationMs, trackUri: track.uri, positionKnown, source };
+  const playerName = typeof entry.playerName === "string" && entry.playerName.trim() ? entry.playerName.trim() : null;
+  return { isPlaying, trackName: track.name, artistName: track.artist, albumName: track.album, albumArtUrl: track.albumArtUrl, progressMs: positionMs, durationMs: track.durationMs, trackUri: track.uri, positionKnown, source, deviceName: playerName };
 }
 
 export async function ping(userId?: string): Promise<void> { await request("ping", {}, userId); }
