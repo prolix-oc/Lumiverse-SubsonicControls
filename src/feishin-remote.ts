@@ -134,6 +134,7 @@ export class FeishinRemoteClient {
       positionKnown: true,
       isPlaying: this.status.toLowerCase() === "playing",
       source: "feishin",
+      albumArtKey: `${text(song.artistName)}\u0000${text(song.album)}\u0000${text(song.coverArt) || id}`,
       deviceName: "Feishin Desktop",
       volume: this.volume,
     } : null;

@@ -128,7 +128,8 @@ async function mapState(entry, isPlaying, source, positionMs = 0, userId, positi
     return null;
   const track = await mapTrack(entry, userId);
   const playerName = typeof entry.playerName === "string" && entry.playerName.trim() ? entry.playerName.trim() : null;
-  return { isPlaying, trackName: track.name, artistName: track.artist, albumName: track.album, albumArtUrl: track.albumArtUrl, progressMs: positionMs, durationMs: track.durationMs, trackUri: track.uri, positionKnown, source, deviceName: playerName };
+  const albumArtKey = typeof entry.coverArt === "string" && entry.coverArt ? entry.coverArt : typeof entry.albumId === "string" && entry.albumId ? entry.albumId : null;
+  return { isPlaying, trackName: track.name, artistName: track.artist, albumName: track.album, albumArtUrl: track.albumArtUrl, albumArtKey, progressMs: positionMs, durationMs: track.durationMs, trackUri: track.uri, positionKnown, source, deviceName: playerName };
 }
 async function ping(userId) {
   await request("ping", {}, userId);
@@ -415,6 +416,7 @@ class FeishinRemoteClient {
       positionKnown: true,
       isPlaying: this.status.toLowerCase() === "playing",
       source: "feishin",
+      albumArtKey: `${text(song.artistName)}\x00${text(song.album)}\x00${text(song.coverArt) || id}`,
       deviceName: "Feishin Desktop",
       volume: this.volume
     } : null;
@@ -499,6 +501,8 @@ var POLL_IDLE_MS = 1000;
 var DEFAULT_PLAYBACK_POSITION_OFFSET_MS = 1000;
 var MIN_PLAYBACK_POSITION_OFFSET_MS = -1e4;
 var MAX_PLAYBACK_POSITION_OFFSET_MS = 1e4;
+var ALBUM_PALETTE_CACHE_STORAGE_KEY = "album-palette-cache.json";
+var ALBUM_PALETTE_CACHE_LIMIT = 48;
 var pollingTimers = new Map;
 var pollingUsers = new Set;
 var stateByUser = new Map;
@@ -508,6 +512,8 @@ var lyricsRequestsByUser = new Map;
 var jukeboxUnavailableReasons = new Map;
 var jukeboxAvailabilityChecked = new Set;
 var feishinClients = new Map;
+var albumPaletteCaches = new Map;
+var activeAlbumPaletteKeys = new Map;
 var activeUserId2 = null;
 function send(message, userId) {
   spindle.sendToFrontend(message, userId);
@@ -516,19 +522,23 @@ function stopFeishin(userId) {
   feishinClients.get(userId)?.disconnect();
   feishinClients.delete(userId);
 }
-function updateFeishinState(userId, state) {
+async function updateFeishinState(userId, state) {
   const previousState = stateByUser.get(userId);
   stateByUser.set(userId, state);
   stateObservedAt.set(userId, Date.now());
   pushPlaybackMacros(state);
   syncLyricsForTrackChange(userId, previousState?.trackUri ?? null, state);
-  send({ type: "state", playbackState: state, connected: isConnected(userId) }, userId);
+  const config = await loadConfig(userId);
+  const albumPalette = config ? await restoreAlbumPalette(state, config, userId) : null;
+  send({ type: "state", playbackState: state, connected: isConnected(userId), albumPalette }, userId);
 }
 function startFeishin(config, userId) {
   stopFeishin(userId);
   if (config.remoteControl !== "feishin" || !config.feishinUrl)
     return;
-  const client = new FeishinRemoteClient((state) => updateFeishinState(userId, state), (message) => spindle.log.warn(`Feishin Remote (${userId}): ${message}`));
+  const client = new FeishinRemoteClient((state) => {
+    updateFeishinState(userId, state);
+  }, (message) => spindle.log.warn(`Feishin Remote (${userId}): ${message}`));
   feishinClients.set(userId, client);
   try {
     client.connect(config.feishinUrl, config.feishinUsername, config.feishinPassword);
@@ -550,6 +560,69 @@ function normalizePlaybackPositionOffset(value) {
   if (!Number.isFinite(numeric))
     return DEFAULT_PLAYBACK_POSITION_OFFSET_MS;
   return Math.max(MIN_PLAYBACK_POSITION_OFFSET_MS, Math.min(MAX_PLAYBACK_POSITION_OFFSET_MS, Math.round(numeric)));
+}
+function isAlbumColors(value) {
+  if (!value || typeof value !== "object")
+    return false;
+  const colors = value;
+  return [
+    colors.dominant?.r,
+    colors.dominant?.g,
+    colors.dominant?.b,
+    colors.dominantHsl?.h,
+    colors.dominantHsl?.s,
+    colors.dominantHsl?.l
+  ].every((component) => typeof component === "number" && Number.isFinite(component)) && typeof colors.isLight === "boolean";
+}
+async function getAlbumPaletteCache(config, userId) {
+  const cached = albumPaletteCaches.get(userId);
+  if (cached?.serverUrl === config.serverUrl)
+    return cached;
+  const stored = await spindle.userStorage.getJson(ALBUM_PALETTE_CACHE_STORAGE_KEY, {
+    fallback: { serverUrl: "", entries: {} },
+    userId
+  });
+  const entries = {};
+  if (stored.serverUrl === config.serverUrl && stored.entries && typeof stored.entries === "object") {
+    for (const [artworkKey, colors] of Object.entries(stored.entries)) {
+      if (isAlbumColors(colors))
+        entries[artworkKey] = colors;
+    }
+  }
+  const next2 = { serverUrl: config.serverUrl, entries };
+  albumPaletteCaches.set(userId, next2);
+  return next2;
+}
+function paletteKey(config, artworkKey) {
+  return `${config.serverUrl}\x00${artworkKey}`;
+}
+async function saveAlbumPalette(config, artworkKey, colors, userId) {
+  const cache = await getAlbumPaletteCache(config, userId);
+  delete cache.entries[artworkKey];
+  cache.entries[artworkKey] = colors;
+  while (Object.keys(cache.entries).length > ALBUM_PALETTE_CACHE_LIMIT) {
+    const oldestKey = Object.keys(cache.entries)[0];
+    delete cache.entries[oldestKey];
+  }
+  await spindle.userStorage.setJson(ALBUM_PALETTE_CACHE_STORAGE_KEY, cache, { userId });
+}
+async function restoreAlbumPalette(state, config, userId) {
+  const artworkKey = state?.albumArtKey;
+  if (!artworkKey)
+    return null;
+  const colors = (await getAlbumPaletteCache(config, userId)).entries[artworkKey];
+  if (!colors)
+    return null;
+  const key = paletteKey(config, artworkKey);
+  if (activeAlbumPaletteKeys.get(userId) !== key) {
+    try {
+      await spindle.theme.applyPalette({ accent: colors.dominantHsl }, userId);
+      activeAlbumPaletteKeys.set(userId, key);
+    } catch (error) {
+      spindle.log.warn(`Album theme restore: ${error?.message || error}`);
+    }
+  }
+  return { artworkKey, colors };
 }
 async function loadUser(userId) {
   const config = await loadConfig(userId);
@@ -642,10 +715,16 @@ async function pushState(userId) {
   if (stateRequestSequences.get(userId) !== requestSequence) {
     return stateByUser.get(userId) || null;
   }
+  if (!config) {
+    pushPlaybackMacros(null);
+    send({ type: "state", playbackState: null, connected: false }, userId);
+    return null;
+  }
   if (config?.remoteControl === "feishin") {
     const state2 = stateByUser.get(userId) || null;
     pushPlaybackMacros(state2);
-    send({ type: "state", playbackState: state2, connected: true }, userId);
+    const albumPalette2 = await restoreAlbumPalette(state2, config, userId);
+    send({ type: "state", playbackState: state2, connected: true, albumPalette: albumPalette2 }, userId);
     return state2;
   }
   if (!isConnected(userId)) {
@@ -669,7 +748,8 @@ async function pushState(userId) {
   stateObservedAt.set(userId, now);
   pushPlaybackMacros(state);
   syncLyricsForTrackChange(userId, previousState?.trackUri ?? null, state);
-  send({ type: "state", playbackState: state, connected: true }, userId);
+  const albumPalette = await restoreAlbumPalette(state, config, userId);
+  send({ type: "state", playbackState: state, connected: true, albumPalette }, userId);
   return state;
 }
 function startPolling(userId) {
@@ -696,10 +776,24 @@ async function sendConfig(userId) {
   const config = await loadConfig(userId);
   send({ type: "config", serverUrl: config?.serverUrl || "", username: config?.username || "", hasPassword: !!config?.password, remoteControl: config?.remoteControl || "none", feishinUrl: config?.feishinUrl || "", feishinUsername: config?.feishinUsername || "", hasFeishinPassword: !!config?.feishinPassword, playbackPositionOffsetMs: config?.playbackPositionOffsetMs ?? DEFAULT_PLAYBACK_POSITION_OFFSET_MS, jukeboxUnavailableReason: jukeboxUnavailableReasons.get(userId) || null, connected: !!config }, userId);
 }
-async function updateTheme(colors, userId) {
+async function updateTheme(colors, userId, artworkKey) {
   try {
     if (!colors) {
       await spindle.theme.clear(userId);
+      activeAlbumPaletteKeys.delete(userId);
+      return;
+    }
+    const config = await loadConfig(userId);
+    const currentArtworkKey = stateByUser.get(userId)?.albumArtKey;
+    if (artworkKey && currentArtworkKey && artworkKey !== currentArtworkKey)
+      return;
+    if (config && artworkKey) {
+      await saveAlbumPalette(config, artworkKey, colors, userId);
+      const key = paletteKey(config, artworkKey);
+      if (activeAlbumPaletteKeys.get(userId) === key)
+        return;
+      await spindle.theme.applyPalette({ accent: colors.dominantHsl }, userId);
+      activeAlbumPaletteKeys.set(userId, key);
       return;
     }
     await spindle.theme.applyPalette({ accent: colors.dominantHsl }, userId);
@@ -776,7 +870,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         send({ type: "state", playbackState: null, connected: false }, userId);
         break;
       case "feishin_state":
-        updateFeishinState(userId, message.playbackState);
+        await updateFeishinState(userId, message.playbackState);
         break;
       case "play": {
         if ((await loadConfig(userId))?.remoteControl === "feishin")
@@ -836,7 +930,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         break;
       }
       case "album_colors":
-        await updateTheme(message.colors, userId);
+        await updateTheme(message.colors, userId, message.artworkKey);
         break;
     }
   } catch (error) {

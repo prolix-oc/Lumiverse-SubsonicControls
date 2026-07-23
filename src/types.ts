@@ -13,10 +13,10 @@ export type FrontendToBackend =
   | { type: "queue"; trackUri: string }
   | { type: "get_chat_songs"; chatId: string }
   | { type: "get_lyrics" }
-  | { type: "album_colors"; colors: AlbumColors | null };
+  | { type: "album_colors"; colors: AlbumColors | null; artworkKey?: string | null };
 
 export type BackendToFrontend =
-  | { type: "state"; playbackState: PlaybackState | null; connected: boolean }
+  | { type: "state"; playbackState: PlaybackState | null; connected: boolean; albumPalette?: AlbumPalette | null }
   | { type: "config"; serverUrl: string; username: string; hasPassword: boolean; remoteControl: RemoteControl; feishinUrl: string; feishinUsername: string; hasFeishinPassword: boolean; playbackPositionOffsetMs: number; jukeboxUnavailableReason: string | null; connected: boolean }
   | { type: "search_results"; results: SearchResult[] }
   | { type: "chat_songs"; chatId: string; entries: MessageSongEntry[] }
@@ -35,6 +35,8 @@ export interface PlaybackState {
   progressMs: number;
   durationMs: number;
   trackUri: string;
+  /** Stable Subsonic cover-art identifier, used to reuse an album palette. */
+  albumArtKey?: string | null;
   /** Whether the server supplied a real playback position (OpenSubsonic playbackReport). */
   positionKnown?: boolean;
   source: "jukebox" | "now_playing" | "feishin";
@@ -95,6 +97,11 @@ export interface AlbumColors {
   dominant: { r: number; g: number; b: number };
   dominantHsl: { h: number; s: number; l: number };
   isLight: boolean;
+}
+
+export interface AlbumPalette {
+  artworkKey: string;
+  colors: AlbumColors;
 }
 
 export interface SubsonicConfig {

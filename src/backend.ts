@@ -1,6 +1,6 @@
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
-import type { AlbumColors, BackendToFrontend, FrontendToBackend, MessageSongEntry, PlaybackState, SongSnapshot, SubsonicConfig } from "./types";
+import type { AlbumColors, AlbumPalette, BackendToFrontend, FrontendToBackend, MessageSongEntry, PlaybackState, SongSnapshot, SubsonicConfig } from "./types";
 import * as subsonic from "./subsonic-api";
 import { FeishinRemoteClient } from "./feishin-remote";
 import {
@@ -15,6 +15,8 @@ const POLL_IDLE_MS = 1_000;
 const DEFAULT_PLAYBACK_POSITION_OFFSET_MS = 1_000;
 const MIN_PLAYBACK_POSITION_OFFSET_MS = -10_000;
 const MAX_PLAYBACK_POSITION_OFFSET_MS = 10_000;
+const ALBUM_PALETTE_CACHE_STORAGE_KEY = "album-palette-cache.json";
+const ALBUM_PALETTE_CACHE_LIMIT = 48;
 const pollingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pollingUsers = new Set<string>();
 const stateByUser = new Map<string, PlaybackState | null>();
@@ -27,6 +29,8 @@ const lyricsRequestsByUser = new Map<string, LyricsRequestCoordinator<subsonic.L
 const jukeboxUnavailableReasons = new Map<string, string>();
 const jukeboxAvailabilityChecked = new Set<string>();
 const feishinClients = new Map<string, FeishinRemoteClient>();
+const albumPaletteCaches = new Map<string, { serverUrl: string; entries: Record<string, AlbumColors> }>();
+const activeAlbumPaletteKeys = new Map<string, string>();
 let activeUserId: string | null = null;
 
 function send(message: BackendToFrontend, userId: string): void { spindle.sendToFrontend(message, userId); }
@@ -36,20 +40,22 @@ function stopFeishin(userId: string): void {
   feishinClients.delete(userId);
 }
 
-function updateFeishinState(userId: string, state: PlaybackState | null): void {
+async function updateFeishinState(userId: string, state: PlaybackState | null): Promise<void> {
   const previousState = stateByUser.get(userId);
   stateByUser.set(userId, state);
   stateObservedAt.set(userId, Date.now());
   pushPlaybackMacros(state);
   syncLyricsForTrackChange(userId, previousState?.trackUri ?? null, state);
-  send({ type: "state", playbackState: state, connected: subsonic.isConnected(userId) }, userId);
+  const config = await loadConfig(userId);
+  const albumPalette = config ? await restoreAlbumPalette(state, config, userId) : null;
+  send({ type: "state", playbackState: state, connected: subsonic.isConnected(userId), albumPalette }, userId);
 }
 
 function startFeishin(config: SubsonicConfig, userId: string): void {
   stopFeishin(userId);
   if (config.remoteControl !== "feishin" || !config.feishinUrl) return;
   const client = new FeishinRemoteClient(
-    (state) => updateFeishinState(userId, state),
+    (state) => { void updateFeishinState(userId, state); },
     (message) => spindle.log.warn(`Feishin Remote (${userId}): ${message}`),
   );
   feishinClients.set(userId, client);
@@ -73,6 +79,70 @@ function normalizePlaybackPositionOffset(value: unknown): number {
   const numeric = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(numeric)) return DEFAULT_PLAYBACK_POSITION_OFFSET_MS;
   return Math.max(MIN_PLAYBACK_POSITION_OFFSET_MS, Math.min(MAX_PLAYBACK_POSITION_OFFSET_MS, Math.round(numeric)));
+}
+
+function isAlbumColors(value: unknown): value is AlbumColors {
+  if (!value || typeof value !== "object") return false;
+  const colors = value as AlbumColors;
+  return [
+    colors.dominant?.r, colors.dominant?.g, colors.dominant?.b,
+    colors.dominantHsl?.h, colors.dominantHsl?.s, colors.dominantHsl?.l,
+  ].every((component) => typeof component === "number" && Number.isFinite(component))
+    && typeof colors.isLight === "boolean";
+}
+
+async function getAlbumPaletteCache(config: SubsonicConfig, userId: string): Promise<{ serverUrl: string; entries: Record<string, AlbumColors> }> {
+  const cached = albumPaletteCaches.get(userId);
+  if (cached?.serverUrl === config.serverUrl) return cached;
+
+  const stored = await spindle.userStorage.getJson(ALBUM_PALETTE_CACHE_STORAGE_KEY, {
+    fallback: { serverUrl: "", entries: {} },
+    userId,
+  }) as { serverUrl?: unknown; entries?: unknown };
+  const entries: Record<string, AlbumColors> = {};
+  if (stored.serverUrl === config.serverUrl && stored.entries && typeof stored.entries === "object") {
+    for (const [artworkKey, colors] of Object.entries(stored.entries)) {
+      if (isAlbumColors(colors)) entries[artworkKey] = colors;
+    }
+  }
+  const next = { serverUrl: config.serverUrl, entries };
+  albumPaletteCaches.set(userId, next);
+  return next;
+}
+
+function paletteKey(config: SubsonicConfig, artworkKey: string): string {
+  return `${config.serverUrl}\u0000${artworkKey}`;
+}
+
+async function saveAlbumPalette(config: SubsonicConfig, artworkKey: string, colors: AlbumColors, userId: string): Promise<void> {
+  const cache = await getAlbumPaletteCache(config, userId);
+  // Reinsert existing entries to keep recently used palettes while bounding
+  // disk use for long-lived music libraries.
+  delete cache.entries[artworkKey];
+  cache.entries[artworkKey] = colors;
+  while (Object.keys(cache.entries).length > ALBUM_PALETTE_CACHE_LIMIT) {
+    const oldestKey = Object.keys(cache.entries)[0];
+    delete cache.entries[oldestKey];
+  }
+  await spindle.userStorage.setJson(ALBUM_PALETTE_CACHE_STORAGE_KEY, cache, { userId });
+}
+
+async function restoreAlbumPalette(state: PlaybackState | null, config: SubsonicConfig, userId: string): Promise<AlbumPalette | null> {
+  const artworkKey = state?.albumArtKey;
+  if (!artworkKey) return null;
+  const colors = (await getAlbumPaletteCache(config, userId)).entries[artworkKey];
+  if (!colors) return null;
+
+  const key = paletteKey(config, artworkKey);
+  if (activeAlbumPaletteKeys.get(userId) !== key) {
+    try {
+      await spindle.theme.applyPalette({ accent: colors.dominantHsl }, userId);
+      activeAlbumPaletteKeys.set(userId, key);
+    } catch (error: any) {
+      spindle.log.warn(`Album theme restore: ${error?.message || error}`);
+    }
+  }
+  return { artworkKey, colors };
 }
 
 async function loadUser(userId: string): Promise<boolean> {
@@ -175,10 +245,16 @@ async function pushState(userId: string): Promise<PlaybackState | null> {
   if (stateRequestSequences.get(userId) !== requestSequence) {
     return stateByUser.get(userId) || null;
   }
+  if (!config) {
+    pushPlaybackMacros(null);
+    send({ type: "state", playbackState: null, connected: false }, userId);
+    return null;
+  }
   if (config?.remoteControl === "feishin") {
     const state = stateByUser.get(userId) || null;
     pushPlaybackMacros(state);
-    send({ type: "state", playbackState: state, connected: true }, userId);
+    const albumPalette = await restoreAlbumPalette(state, config, userId);
+    send({ type: "state", playbackState: state, connected: true, albumPalette }, userId);
     return state;
   }
   if (!subsonic.isConnected(userId)) {
@@ -215,7 +291,8 @@ async function pushState(userId: string): Promise<PlaybackState | null> {
   stateObservedAt.set(userId, now);
   pushPlaybackMacros(state);
   syncLyricsForTrackChange(userId, previousState?.trackUri ?? null, state);
-  send({ type: "state", playbackState: state, connected: true }, userId);
+  const albumPalette = await restoreAlbumPalette(state, config, userId);
+  send({ type: "state", playbackState: state, connected: true, albumPalette }, userId);
   return state;
 }
 
@@ -245,10 +322,26 @@ async function sendConfig(userId: string): Promise<void> {
   send({ type: "config", serverUrl: config?.serverUrl || "", username: config?.username || "", hasPassword: !!config?.password, remoteControl: config?.remoteControl || "none", feishinUrl: config?.feishinUrl || "", feishinUsername: config?.feishinUsername || "", hasFeishinPassword: !!config?.feishinPassword, playbackPositionOffsetMs: config?.playbackPositionOffsetMs ?? DEFAULT_PLAYBACK_POSITION_OFFSET_MS, jukeboxUnavailableReason: jukeboxUnavailableReasons.get(userId) || null, connected: !!config }, userId);
 }
 
-async function updateTheme(colors: AlbumColors | null, userId: string): Promise<void> {
+async function updateTheme(colors: AlbumColors | null, userId: string, artworkKey?: string | null): Promise<void> {
   try {
     if (!colors) {
       await spindle.theme.clear(userId);
+      activeAlbumPaletteKeys.delete(userId);
+      return;
+    }
+
+    const config = await loadConfig(userId);
+    const currentArtworkKey = stateByUser.get(userId)?.albumArtKey;
+    // A slow image extraction can finish after playback moves on. Do not let
+    // that stale palette replace the active track's palette.
+    if (artworkKey && currentArtworkKey && artworkKey !== currentArtworkKey) return;
+
+    if (config && artworkKey) {
+      await saveAlbumPalette(config, artworkKey, colors, userId);
+      const key = paletteKey(config, artworkKey);
+      if (activeAlbumPaletteKeys.get(userId) === key) return;
+      await spindle.theme.applyPalette({ accent: colors.dominantHsl }, userId);
+      activeAlbumPaletteKeys.set(userId, key);
       return;
     }
 
@@ -330,7 +423,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "feishin_state":
         // Kept for compatibility with frontends built before the Remote client
         // moved to the backend, where encrypted credentials are available.
-        updateFeishinState(userId, message.playbackState);
+        await updateFeishinState(userId, message.playbackState);
         break;
       case "play": {
         if ((await loadConfig(userId))?.remoteControl === "feishin") feishinClients.get(userId)?.send("play");
@@ -367,7 +460,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         }, userId);
         break;
       }
-      case "album_colors": await updateTheme(message.colors, userId); break;
+      case "album_colors": await updateTheme(message.colors, userId, message.artworkKey); break;
     }
   } catch (error: any) {
     send({ type: "error", message: error?.message || "Subsonic request failed" }, userId);

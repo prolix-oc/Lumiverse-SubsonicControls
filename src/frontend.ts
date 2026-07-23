@@ -28,6 +28,8 @@ export function setup(ctx: SpindleFrontendContext) {
   let lastThemeArtUrl: string | null = null;
   let themeApplySeq = 0;
   let pendingThemeClearTimer: ReturnType<typeof setTimeout> | null = null;
+  const albumPaletteCache = new Map<string, AlbumColors>();
+  const ALBUM_PALETTE_CACHE_LIMIT = 48;
   type ProxiedImageResponse = {
     status?: number;
     headers?: Record<string, string>;
@@ -74,6 +76,17 @@ export function setup(ctx: SpindleFrontendContext) {
     cancelPendingThemeClear();
     themeApplySeq += 1;
     send({ type: "album_colors", colors: null });
+  }
+  function rememberAlbumPalette(artworkKey: string, colors: AlbumColors) {
+    // Keep the in-page cache small; the backend keeps the durable cache used
+    // to restore the active palette after page and extension reloads.
+    albumPaletteCache.delete(artworkKey);
+    albumPaletteCache.set(artworkKey, colors);
+    while (albumPaletteCache.size > ALBUM_PALETTE_CACHE_LIMIT) {
+      const oldestKey = albumPaletteCache.keys().next().value;
+      if (!oldestKey) break;
+      albumPaletteCache.delete(oldestKey);
+    }
   }
   // Keep a palette through short server-side gaps while Navidrome advances
   // tracks, preventing the UI from flashing back to the base theme.
@@ -693,6 +706,7 @@ export function setup(ctx: SpindleFrontendContext) {
     const message = raw as BackendToFrontend;
     switch (message.type) {
       case "config":
+        if (configuredServerUrl && configuredServerUrl !== message.serverUrl) albumPaletteCache.clear();
         remoteControl = message.remoteControl;
         connected = message.connected;
         jukeboxEnabled = message.remoteControl === "jukebox";
@@ -730,16 +744,31 @@ export function setup(ctx: SpindleFrontendContext) {
         }
         syncWidget();
         const artUrl = getTrackScopedArtUrl(currentState?.albumArtUrl ?? null, currentState?.trackUri);
+        const artworkKey = currentState?.albumArtKey || artUrl;
         if (artUrl !== lastThemeArtUrl) {
           lastThemeArtUrl = artUrl;
           if (artUrl) {
             cancelPendingThemeClear();
-            const applySeq = ++themeApplySeq;
-            void extractColorsFromImage(artUrl).then((colors) => {
-              if (applySeq !== themeApplySeq || artUrl !== lastThemeArtUrl) return;
-              if (colors) send({ type: "album_colors", colors });
-              else if (!connected) clearAlbumTheme();
-            });
+            const restoredFromBackend = artworkKey && message.albumPalette?.artworkKey === artworkKey;
+            const restoredPalette = restoredFromBackend
+              ? message.albumPalette!.colors
+              : albumPaletteCache.get(artworkKey || "");
+            if (artworkKey && restoredPalette) {
+              rememberAlbumPalette(artworkKey, restoredPalette);
+              // The backend has already restored a durable palette before it
+              // sent this state. A local cache entry is sent only when it was
+              // not included in that response.
+              if (!restoredFromBackend) send({ type: "album_colors", colors: restoredPalette, artworkKey });
+            } else {
+              const applySeq = ++themeApplySeq;
+              void extractColorsFromImage(artUrl).then((colors) => {
+                if (applySeq !== themeApplySeq || artUrl !== lastThemeArtUrl) return;
+                if (colors) {
+                  if (artworkKey) rememberAlbumPalette(artworkKey, colors);
+                  send({ type: "album_colors", colors, artworkKey });
+                } else if (!connected) clearAlbumTheme();
+              });
+            }
           } else if (connected) {
             scheduleAlbumThemeClear();
           } else {
@@ -759,6 +788,7 @@ export function setup(ctx: SpindleFrontendContext) {
         search.setAvailable(true);
         search.setPlaybackAvailable(remoteControl === "jukebox");
         lastThemeArtUrl = null;
+        albumPaletteCache.clear();
         clearAlbumTheme();
         nowPlaying.update(null, false); controls.update(null, false, false); lyrics.clear();
         miniPlayer.updateLyrics(null, null, null, false);
@@ -811,6 +841,7 @@ export function setup(ctx: SpindleFrontendContext) {
     lyricsTrackId = null;
     jukeboxEnabled = false;
     lastThemeArtUrl = null;
+    albumPaletteCache.clear();
     clearAlbumTheme();
     settings.update(false, "", "", false, "none", "", "", false, configuredPlaybackPositionOffsetMs, null);
     nowPlaying.update(null, false);
