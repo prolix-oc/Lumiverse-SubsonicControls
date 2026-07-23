@@ -4,8 +4,8 @@ import type { AlbumColors, BackendToFrontend, FrontendToBackend, MessageSongEntr
 import * as subsonic from "./subsonic-api";
 
 type StoredConfig = Omit<SubsonicConfig, "password">;
-const POLL_PLAYING_MS = 5_000;
-const POLL_IDLE_MS = 15_000;
+const POLL_PLAYING_MS = 1_000;
+const POLL_IDLE_MS = 1_000;
 const pollingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const stateByUser = new Map<string, PlaybackState | null>();
 const jukeboxUnavailableReasons = new Map<string, string>();

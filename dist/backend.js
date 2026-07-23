@@ -235,8 +235,8 @@ async function getLyrics(trackId, userId) {
 }
 
 // src/backend.ts
-var POLL_PLAYING_MS = 5000;
-var POLL_IDLE_MS = 15000;
+var POLL_PLAYING_MS = 1000;
+var POLL_IDLE_MS = 1000;
 var pollingTimers = new Map;
 var stateByUser = new Map;
 var jukeboxUnavailableReasons = new Map;
