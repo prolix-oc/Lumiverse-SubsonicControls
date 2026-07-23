@@ -14,7 +14,7 @@ export type FrontendToBackend =
 
 export type BackendToFrontend =
   | { type: "state"; playbackState: PlaybackState | null; connected: boolean }
-  | { type: "config"; serverUrl: string; username: string; hasPassword: boolean; enableJukebox: boolean; connected: boolean }
+  | { type: "config"; serverUrl: string; username: string; hasPassword: boolean; enableJukebox: boolean; jukeboxUnavailableReason: string | null; connected: boolean }
   | { type: "search_results"; results: SearchResult[] }
   | { type: "connected" }
   | { type: "disconnected" }

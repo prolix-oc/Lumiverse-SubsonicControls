@@ -3,17 +3,17 @@ import { createCrossfadeArt, getTrackScopedArtUrl } from "./crossfade-art";
 
 export interface NowPlayingUI { root: HTMLElement; update(state: PlaybackState | null, connected: boolean): void; destroy(): void; }
 export function createNowPlayingUI(): NowPlayingUI {
-  const root = document.createElement("div"); root.className = "subsonic-section";
-  const title = document.createElement("h3"); title.className = "subsonic-section-title"; title.textContent = "Now Playing";
-  const body = document.createElement("div"); body.className = "subsonic-now-playing";
-  const art = createCrossfadeArt("subsonic-album-art");
-  const info = document.createElement("div"); info.className = "subsonic-track-info";
-  const track = document.createElement("div"); track.className = "subsonic-track-name";
-  const artist = document.createElement("div"); artist.className = "subsonic-track-artist";
-  const album = document.createElement("div"); album.className = "subsonic-track-album";
-  const source = document.createElement("div"); source.className = "subsonic-track-source";
+  const root = document.createElement("div"); root.className = "spotify-section";
+  const title = document.createElement("h3"); title.className = "spotify-section-title"; title.textContent = "Now Playing";
+  const body = document.createElement("div"); body.className = "spotify-now-playing";
+  const art = createCrossfadeArt("spotify-album-art");
+  const info = document.createElement("div"); info.className = "spotify-track-info";
+  const track = document.createElement("div"); track.className = "spotify-track-name";
+  const artist = document.createElement("div"); artist.className = "spotify-track-artist";
+  const album = document.createElement("div"); album.className = "spotify-track-album";
+  const source = document.createElement("div"); source.className = "spotify-track-device";
   info.append(track, artist, album, source); body.append(art.el, info);
-  const empty = document.createElement("div"); empty.className = "subsonic-empty";
+  const empty = document.createElement("div"); empty.className = "spotify-empty";
   root.append(title, body, empty);
   return { root, update(state, connected) {
     if (!connected) { body.style.display = "none"; empty.style.display = ""; empty.textContent = "Connect to a Subsonic-compatible server to get started"; art.setUrl(null); return; }

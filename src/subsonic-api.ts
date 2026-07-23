@@ -67,12 +67,25 @@ async function request(method: string, values: Record<string, string | number | 
   });
   for (const [key, value] of Object.entries(values)) if (value !== undefined) params.set(key, String(value));
   const result = await spindle.cors(`${restRoot(config.serverUrl)}/${method}.view?${params.toString()}`, { method: "GET" }) as ApiResponse;
-  if (result.status < 200 || result.status >= 300) throw new Error(`Subsonic ${method} failed (${result.status})`);
+  if (result.status < 200 || result.status >= 300) {
+    if (method === "jukeboxControl" && isJukeboxUnavailableStatus(result.status)) {
+      throw new Error(`This server does not implement the optional Subsonic Jukebox endpoint (HTTP ${result.status}).`);
+    }
+    throw new Error(`Subsonic ${method} failed (${result.status})`);
+  }
   let payload: SubsonicPayload;
   try { payload = JSON.parse(result.body); } catch { throw new Error(`Subsonic ${method} returned invalid JSON`); }
   const error = responseError(payload);
   if (error) throw error;
   return payload["subsonic-response"];
+}
+
+function isJukeboxUnavailableStatus(status: number): boolean {
+  return status === 404 || status === 405 || status === 501;
+}
+
+export function isJukeboxUnavailableError(error: unknown): boolean {
+  return error instanceof Error && /optional Subsonic Jukebox endpoint/.test(error.message);
 }
 
 async function artUrl(coverArt: string | undefined, userId?: string): Promise<string | null> {
@@ -103,6 +116,11 @@ async function mapState(entry: any, isPlaying: boolean, source: PlaybackState["s
 }
 
 export async function ping(userId?: string): Promise<void> { await request("ping", {}, userId); }
+
+/** Checks the optional endpoint without changing the server's playback state. */
+export async function verifyJukebox(userId?: string): Promise<void> {
+  await request("jukeboxControl", { action: "get" }, userId);
+}
 
 export async function search(query: string, userId?: string): Promise<SearchResult[]> {
   const response = await request("search3", { query, songCount: 25, albumCount: 0, artistCount: 0 }, userId);

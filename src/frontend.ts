@@ -1,6 +1,5 @@
 import type { SpindleFrontendContext, SpindleFloatWidgetHandle } from "lumiverse-spindle-types";
 import type { BackendToFrontend, FrontendToBackend, MiniPlayerStyle, PlaybackState } from "./types";
-import { PANEL_CSS } from "./ui/styles";
 import { SPOTIFY_WIDGET_CSS } from "./ui/spotify-widget-styles";
 import { createSettingsUI } from "./ui/settings";
 import { createNowPlayingUI } from "./ui/now-playing";
@@ -17,7 +16,10 @@ const WIDGET_PREFS_KEY = "subsonic-controls-widget-prefs";
 
 export function setup(ctx: SpindleFrontendContext) {
   const cleanups: Array<() => void> = [];
-  cleanups.push(ctx.dom.addStyle(`${PANEL_CSS}\n${SPOTIFY_WIDGET_CSS}`));
+  // The Subsonic UI intentionally uses the same drawer design system as the
+  // companion Spotify extension. This stylesheet includes both the tab and
+  // shared floating-player styles.
+  cleanups.push(ctx.dom.addStyle(SPOTIFY_WIDGET_CSS));
   const send = (message: unknown) => ctx.sendToBackend(message as FrontendToBackend);
 
   const settings = createSettingsUI(send);
@@ -35,8 +37,24 @@ export function setup(ctx: SpindleFrontendContext) {
     iconSvg: NOTE_ICON,
   });
   cleanups.push(() => tab.destroy());
-  tab.root.classList.add("subsonic-tab-root");
-  const panel = document.createElement("div"); panel.className = "subsonic-panel"; tab.root.appendChild(panel);
+  tab.root.classList.add("spotify-tab-root");
+  const panel = document.createElement("div"); panel.className = "spotify-panel"; tab.root.appendChild(panel);
+
+  function updateTabHeight() {
+    const top = tab.root.getBoundingClientRect().top;
+    const parentBottom = tab.root.parentElement?.getBoundingClientRect().bottom ?? window.innerHeight;
+    const viewportBottom = window.visualViewport?.height ?? window.innerHeight;
+    const bottom = Math.min(parentBottom, viewportBottom);
+    tab.root.style.setProperty("--spotify-tab-height", `${Math.max(240, bottom - top - 2)}px`);
+  }
+  updateTabHeight();
+  const tabHeightObserver = new ResizeObserver(updateTabHeight);
+  tabHeightObserver.observe(tab.root);
+  window.addEventListener("resize", updateTabHeight);
+  cleanups.push(() => {
+    tabHeightObserver.disconnect();
+    window.removeEventListener("resize", updateTabHeight);
+  });
 
   const nowPlaying = createNowPlayingUI();
   const controls = createControlsUI(send);
@@ -251,14 +269,15 @@ export function setup(ctx: SpindleFrontendContext) {
       case "config":
         connected = message.connected;
         jukeboxEnabled = message.enableJukebox;
-        settings.update(message.connected, message.serverUrl, message.username, message.hasPassword, message.enableJukebox);
+        settings.update(message.connected, message.serverUrl, message.username, message.hasPassword, message.enableJukebox, message.jukeboxUnavailableReason);
+        controls.update(currentState, connected, jukeboxEnabled);
         syncWidget();
         break;
       case "state":
         connected = message.connected;
         currentState = message.playbackState;
         nowPlaying.update(currentState, connected);
-        controls.update(currentState, connected);
+        controls.update(currentState, connected, jukeboxEnabled);
         lyrics.updatePlayback(currentState);
         if (currentState?.trackUri && currentState.trackUri !== lyricsTrackId) {
           lyricsTrackId = currentState.trackUri;
@@ -282,7 +301,7 @@ export function setup(ctx: SpindleFrontendContext) {
         break;
       case "disconnected":
         connected = false; currentState = null; lyricsTrackId = null; jukeboxEnabled = false;
-        nowPlaying.update(null, false); controls.update(null, false); lyrics.clear();
+        nowPlaying.update(null, false); controls.update(null, false, false); lyrics.clear();
         miniPlayer.updateLyrics(null, null, null, false);
         modernWidget.updateLyrics(null, null, null, false);
         syncWidget();
@@ -329,9 +348,9 @@ export function setup(ctx: SpindleFrontendContext) {
     currentState = null;
     lyricsTrackId = null;
     jukeboxEnabled = false;
-    settings.update(false, "", "", false, false);
+    settings.update(false, "", "", false, false, null);
     nowPlaying.update(null, false);
-    controls.update(null, false);
+    controls.update(null, false, false);
     lyrics.clear();
     syncWidget();
   });

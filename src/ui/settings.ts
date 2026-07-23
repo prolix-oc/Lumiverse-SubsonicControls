@@ -1,29 +1,29 @@
 export interface SettingsUI {
   root: HTMLElement;
-  update(connected: boolean, serverUrl: string, username: string, hasPassword: boolean, enableJukebox: boolean): void;
+  update(connected: boolean, serverUrl: string, username: string, hasPassword: boolean, enableJukebox: boolean, jukeboxUnavailableReason: string | null): void;
   setConnecting(): void;
   destroy(): void;
 }
 
 export function createSettingsUI(sendToBackend: (message: unknown) => void): SettingsUI {
   const root = document.createElement("section");
-  root.className = "subsonic-settings-card";
+  root.className = "spotify-settings-card";
   const header = document.createElement("header");
-  header.className = "subsonic-settings-card-header";
+  header.className = "spotify-settings-card-header";
   const title = document.createElement("h3");
   title.textContent = "Subsonic Controls";
   const status = document.createElement("span");
-  status.className = "subsonic-status";
+  status.className = "spotify-status";
   header.append(title, status);
 
   const body = document.createElement("div");
-  body.className = "subsonic-settings-card-body";
+  body.className = "spotify-settings-card-body";
   const makeField = (label: string, type: string, placeholder: string) => {
     const wrapper = document.createElement("label");
-    wrapper.className = "subsonic-settings-label";
+    wrapper.className = "spotify-settings-label";
     wrapper.textContent = label;
     const input = document.createElement("input");
-    input.className = "subsonic-input";
+    input.className = "spotify-input";
     input.type = type;
     input.placeholder = placeholder;
     wrapper.appendChild(input);
@@ -35,7 +35,7 @@ export function createSettingsUI(sendToBackend: (message: unknown) => void): Set
   const password = makeField("Password", "password", "Subsonic password");
 
   const jukeboxLabel = document.createElement("label");
-  jukeboxLabel.className = "subsonic-settings-label";
+  jukeboxLabel.className = "spotify-settings-label";
   const jukebox = document.createElement("input");
   jukebox.type = "checkbox";
   jukebox.style.marginRight = "8px";
@@ -44,29 +44,34 @@ export function createSettingsUI(sendToBackend: (message: unknown) => void): Set
   note.style.cssText = "font-size:0.8em;opacity:0.65;margin-top:4px";
   note.textContent = "Search, now-playing and lyrics work with compatible servers. Play, pause, skip and queue require the optional Jukebox endpoint and affect that server-side player.";
   jukeboxLabel.appendChild(note);
+  const jukeboxUnavailable = document.createElement("div");
+  jukeboxUnavailable.style.cssText = "display:none;font-size:0.8em;color:#e74c3c;margin-top:4px";
+  jukeboxLabel.appendChild(jukeboxUnavailable);
   body.appendChild(jukeboxLabel);
 
   const actions = document.createElement("div");
-  actions.className = "subsonic-settings-row";
+  actions.className = "spotify-settings-row";
   const button = document.createElement("button");
-  button.className = "subsonic-btn subsonic-btn-primary";
+  button.className = "spotify-btn spotify-btn-primary";
   actions.appendChild(button);
   body.appendChild(actions);
   root.append(header, body);
   let isConnected = false;
 
-  function update(connected: boolean, url: string, user: string, hasPassword: boolean, enableJukebox: boolean) {
+  function update(connected: boolean, url: string, user: string, hasPassword: boolean, enableJukebox: boolean, jukeboxUnavailableReason: string | null) {
     isConnected = connected;
     if (url) serverUrl.value = url;
     if (user) username.value = user;
     jukebox.checked = enableJukebox;
+    jukeboxUnavailable.textContent = jukeboxUnavailableReason || "";
+    jukeboxUnavailable.style.display = jukeboxUnavailableReason ? "" : "none";
     for (const input of [serverUrl, username, password, jukebox] as HTMLInputElement[]) input.disabled = connected;
     password.value = "";
     password.placeholder = hasPassword ? "Saved securely (re-enter to change)" : "Subsonic password";
     button.textContent = connected ? "Disconnect" : "Connect";
-    button.className = connected ? "subsonic-btn subsonic-btn-danger" : "subsonic-btn subsonic-btn-primary";
+    button.className = connected ? "spotify-btn spotify-btn-danger" : "spotify-btn spotify-btn-primary";
     button.disabled = false;
-    status.innerHTML = connected ? '<span class="subsonic-status-dot connected"></span>Connected' : '<span class="subsonic-status-dot disconnected"></span>Not connected';
+    status.innerHTML = connected ? '<span class="spotify-status-dot connected"></span>Connected' : '<span class="spotify-status-dot disconnected"></span>Not connected';
   }
 
   button.addEventListener("click", () => {
@@ -75,7 +80,7 @@ export function createSettingsUI(sendToBackend: (message: unknown) => void): Set
     const user = username.value.trim();
     const pass = password.value;
     if (!url || !user || !pass) {
-      status.innerHTML = '<span class="subsonic-status-dot disconnected"></span><span style="color:#e74c3c">Server URL, username and password are required</span>';
+      status.innerHTML = '<span class="spotify-status-dot disconnected"></span><span style="color:#e74c3c">Server URL, username and password are required</span>';
       return;
     }
     button.disabled = true;
@@ -83,6 +88,6 @@ export function createSettingsUI(sendToBackend: (message: unknown) => void): Set
     sendToBackend({ type: "connect", serverUrl: url, username: user, password: pass, enableJukebox: jukebox.checked });
   });
 
-  update(false, "", "", false, false);
+  update(false, "", "", false, false, null);
   return { root, update, setConnecting() { button.disabled = true; button.textContent = "Connecting…"; }, destroy() { root.remove(); } };
 }

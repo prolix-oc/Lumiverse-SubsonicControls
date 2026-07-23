@@ -63,8 +63,12 @@ async function request(method, values = {}, userId) {
     if (value !== undefined)
       params.set(key, String(value));
   const result = await spindle.cors(`${restRoot(config.serverUrl)}/${method}.view?${params.toString()}`, { method: "GET" });
-  if (result.status < 200 || result.status >= 300)
+  if (result.status < 200 || result.status >= 300) {
+    if (method === "jukeboxControl" && isJukeboxUnavailableStatus(result.status)) {
+      throw new Error(`This server does not implement the optional Subsonic Jukebox endpoint (HTTP ${result.status}).`);
+    }
     throw new Error(`Subsonic ${method} failed (${result.status})`);
+  }
   let payload;
   try {
     payload = JSON.parse(result.body);
@@ -75,6 +79,12 @@ async function request(method, values = {}, userId) {
   if (error)
     throw error;
   return payload["subsonic-response"];
+}
+function isJukeboxUnavailableStatus(status) {
+  return status === 404 || status === 405 || status === 501;
+}
+function isJukeboxUnavailableError(error) {
+  return error instanceof Error && /optional Subsonic Jukebox endpoint/.test(error.message);
 }
 async function artUrl(coverArt, userId) {
   if (!coverArt)
@@ -105,6 +115,9 @@ async function mapState(entry, isPlaying, source, positionMs = 0, userId) {
 }
 async function ping(userId) {
   await request("ping", {}, userId);
+}
+async function verifyJukebox(userId) {
+  await request("jukeboxControl", { action: "get" }, userId);
 }
 async function search(query, userId) {
   const response = await request("search3", { query, songCount: 25, albumCount: 0, artistCount: 0 }, userId);
@@ -180,6 +193,7 @@ var POLL_PLAYING_MS = 5000;
 var POLL_IDLE_MS = 15000;
 var pollingTimers = new Map;
 var stateByUser = new Map;
+var jukeboxUnavailableReasons = new Map;
 function send(message, userId) {
   spindle.sendToFrontend(message, userId);
 }
@@ -209,11 +223,13 @@ function stopPolling(userId) {
 }
 async function pushState(userId) {
   if (!isConnected(userId)) {
+    pushPlaybackMacros(null);
     send({ type: "state", playbackState: null, connected: false }, userId);
     return null;
   }
   const state = await getPlaybackState(userId);
   stateByUser.set(userId, state);
+  pushPlaybackMacros(state);
   send({ type: "state", playbackState: state, connected: true }, userId);
   return state;
 }
@@ -233,7 +249,7 @@ function startPolling(userId) {
 }
 async function sendConfig(userId) {
   const config = await loadConfig(userId);
-  send({ type: "config", serverUrl: config?.serverUrl || "", username: config?.username || "", hasPassword: !!config?.password, enableJukebox: !!config?.enableJukebox, connected: !!config }, userId);
+  send({ type: "config", serverUrl: config?.serverUrl || "", username: config?.username || "", hasPassword: !!config?.password, enableJukebox: !!config?.enableJukebox, jukeboxUnavailableReason: jukeboxUnavailableReasons.get(userId) || null, connected: !!config }, userId);
 }
 async function updateTheme(colors, userId) {
   if (!colors) {
@@ -257,6 +273,20 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const config = { serverUrl: message.serverUrl, username: message.username, password: message.password, enableJukebox: message.enableJukebox };
         setConfig(userId, config);
         await ping(userId);
+        if (config.enableJukebox) {
+          try {
+            await verifyJukebox(userId);
+            jukeboxUnavailableReasons.delete(userId);
+          } catch (error) {
+            if (!isJukeboxUnavailableError(error))
+              throw error;
+            config.enableJukebox = false;
+            jukeboxUnavailableReasons.set(userId, error.message);
+            spindle.log.warn(`Jukebox disabled for ${userId}: ${error.message}`);
+          }
+        } else {
+          jukeboxUnavailableReasons.delete(userId);
+        }
         await saveConfig(config, userId);
         send({ type: "connected" }, userId);
         await sendConfig(userId);
@@ -267,6 +297,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
         stopPolling(userId);
         setConfig(userId, null);
         stateByUser.delete(userId);
+        jukeboxUnavailableReasons.delete(userId);
+        pushPlaybackMacros(null);
         await spindle.userStorage.delete("config.json", userId).catch(() => {});
         await spindle.enclave.delete("subsonic_password", userId);
         await updateTheme(null, userId);
@@ -310,3 +342,89 @@ spindle.onFrontendMessage(async (raw, userId) => {
   }
 });
 spindle.log.info("Subsonic Controls loaded");
+async function getMacroPlaybackState() {
+  return isConnected() ? getPlaybackState().catch(() => null) : null;
+}
+spindle.registerMacro({
+  name: "subsonic_now_playing",
+  category: "extension:subsonic_controls",
+  description: "Returns the currently playing Subsonic track",
+  returnType: "string",
+  handler: async () => {
+    const state = await getMacroPlaybackState();
+    return state ? `${state.trackName} by ${state.artistName}` : "Nothing playing";
+  }
+});
+spindle.registerMacro({
+  name: "subsonic_track_name",
+  category: "extension:subsonic_controls",
+  description: "Returns the track name of the currently playing Subsonic track",
+  returnType: "string",
+  handler: async () => (await getMacroPlaybackState())?.trackName || ""
+});
+spindle.registerMacro({
+  name: "subsonic_artists",
+  category: "extension:subsonic_controls",
+  description: "Returns the artist of the currently playing Subsonic track",
+  returnType: "string",
+  handler: async () => (await getMacroPlaybackState())?.artistName || ""
+});
+spindle.registerMacro({
+  name: "subsonic_album_name",
+  category: "extension:subsonic_controls",
+  description: "Returns the album name of the currently playing Subsonic track",
+  returnType: "string",
+  handler: async () => (await getMacroPlaybackState())?.albumName || ""
+});
+spindle.registerMacro({
+  name: "subsonic_album_art",
+  category: "extension:subsonic_controls",
+  description: "Returns the URL of the currently playing Subsonic track's album art",
+  returnType: "string",
+  handler: async () => (await getMacroPlaybackState())?.albumArtUrl || ""
+});
+spindle.registerMacro({
+  name: "subsonic_is_playing",
+  category: "extension:subsonic_controls",
+  description: "Returns whether Subsonic is currently playing a track",
+  returnType: "boolean",
+  volatile: true,
+  handler: async () => (await getMacroPlaybackState())?.isPlaying ?? false
+});
+spindle.registerMacro({
+  name: "subsonic_lyrics",
+  category: "extension:subsonic_controls",
+  description: "Returns the lyrics of the currently playing Subsonic track",
+  returnType: "string",
+  handler: async () => {
+    const state = await getMacroPlaybackState();
+    return state ? await getLyrics(state.trackUri).catch(() => null) || "No lyrics available" : "No lyrics available";
+  }
+});
+spindle.registerMacro({
+  name: "subsonic_has_lyrics",
+  category: "extension:subsonic_controls",
+  description: "Returns whether the currently playing Subsonic track has lyrics available",
+  returnType: "boolean",
+  handler: async () => {
+    const state = await getMacroPlaybackState();
+    return !!(state && await getLyrics(state.trackUri).catch(() => null));
+  }
+});
+function pushPlaybackMacros(state) {
+  if (!state) {
+    spindle.updateMacroValue("subsonic_now_playing", "Nothing playing");
+    spindle.updateMacroValue("subsonic_track_name", "");
+    spindle.updateMacroValue("subsonic_artists", "");
+    spindle.updateMacroValue("subsonic_album_name", "");
+    spindle.updateMacroValue("subsonic_album_art", "");
+    spindle.updateMacroValue("subsonic_is_playing", "false");
+    return;
+  }
+  spindle.updateMacroValue("subsonic_now_playing", `${state.trackName} by ${state.artistName}`);
+  spindle.updateMacroValue("subsonic_track_name", state.trackName);
+  spindle.updateMacroValue("subsonic_artists", state.artistName);
+  spindle.updateMacroValue("subsonic_album_name", state.albumName);
+  spindle.updateMacroValue("subsonic_album_art", state.albumArtUrl || "");
+  spindle.updateMacroValue("subsonic_is_playing", String(state.isPlaying));
+}

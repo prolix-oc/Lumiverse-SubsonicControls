@@ -10,20 +10,20 @@ export interface LyricsUI {
 }
 
 export function createLyricsUI(): LyricsUI {
-  const root = document.createElement("section"); root.className = "subsonic-section subsonic-lyrics-section";
-  const title = document.createElement("h3"); title.className = "subsonic-section-title"; title.textContent = "Lyrics";
-  const body = document.createElement("div"); body.className = "subsonic-lyrics-body";
+  const root = document.createElement("section"); root.className = "spotify-section spotify-lyrics-section";
+  const title = document.createElement("h3"); title.className = "spotify-section-title"; title.textContent = "Lyrics";
+  const body = document.createElement("div"); body.className = "spotify-lyrics-body";
   root.append(title, body);
-  const show = (text: string, className = "") => { body.className = `subsonic-lyrics-body ${className}`.trim(); body.textContent = text; };
+  const show = (text: string, className = "") => { body.className = `spotify-lyrics-body ${className}`.trim(); body.textContent = text; };
   return {
     root,
     update(_trackId, plainLyrics, syncedLyrics, instrumental) {
       if (instrumental) show("Instrumental");
-      else if (syncedLyrics || plainLyrics) show(syncedLyrics || plainLyrics || "", "subsonic-lyrics-text");
+      else if (syncedLyrics || plainLyrics) show(syncedLyrics || plainLyrics || "", "spotify-lyrics-text");
       else show("No lyrics are available for this track.");
     },
     updatePlayback(_state) {},
-    setLoading(loading) { if (loading) show("Loading lyrics…", "subsonic-lyrics-loading"); },
+    setLoading(loading) { if (loading) show("Loading lyrics…", "spotify-lyrics-status-loading"); },
     clear() { show(""); },
     destroy() { root.remove(); },
   };

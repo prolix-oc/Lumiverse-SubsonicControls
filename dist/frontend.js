@@ -1,38 +1,3 @@
-// src/ui/styles.ts
-var PANEL_CSS = `
-.subsonic-tab-root { min-height: 0; overflow: hidden; }
-.subsonic-panel { overflow-y: auto; height: 100%; padding: 12px; color: var(--lumiverse-text, #eee); }
-.subsonic-section { margin-bottom: 18px; }
-.subsonic-section-title { font-size: 0.85rem; letter-spacing: .05em; text-transform: uppercase; opacity: .7; margin: 0 0 9px; }
-.subsonic-settings-card { border: 1px solid var(--lumiverse-border, #3a3a3a); background: var(--lumiverse-bg-elevated, #202020); border-radius: 10px; overflow: hidden; }
-.subsonic-settings-card-header { display:flex; justify-content:space-between; align-items:center; padding: 12px 14px; border-bottom: 1px solid var(--lumiverse-border, #3a3a3a); }
-.subsonic-settings-card-header h3 { margin:0; font-size:1rem; }
-.subsonic-settings-card-body { display:grid; gap: 12px; padding: 14px; }
-.subsonic-settings-label { display:grid; gap:6px; font-size:.85rem; }
-.subsonic-settings-row { display:flex; gap:8px; align-items:center; }
-.subsonic-input { width:100%; box-sizing:border-box; background:var(--lumiverse-bg, #151515); border:1px solid var(--lumiverse-border, #3a3a3a); border-radius:6px; color:inherit; padding:8px; }
-.subsonic-input:focus { outline: 2px solid var(--lumiverse-accent, #65b8ff); outline-offset:1px; }
-.subsonic-btn, .subsonic-ctrl-btn, .subsonic-search-item-btn { cursor:pointer; border:0; color:inherit; border-radius:6px; }
-.subsonic-btn { padding:8px 12px; font-weight:600; }
-.subsonic-btn-primary { background:var(--lumiverse-accent, #3182ce); }
-.subsonic-btn-danger { background:#b84343; }
-.subsonic-status { font-size:.8rem; opacity:.8; }
-.subsonic-status-dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:5px; }.subsonic-status-dot.connected{background:#56c271}.subsonic-status-dot.disconnected{background:#a0a0a0}
-.subsonic-now-playing { display:flex; gap:12px; padding:10px; border-radius:8px; background:var(--lumiverse-bg-elevated, #202020); }
-.subsonic-album-art { width:64px; height:64px; flex:0 0 auto; border-radius:6px; overflow:hidden; background:#333; }.subsonic-cover-art img { width:100%; height:100%; object-fit:cover; }
-.subsonic-track-info { min-width:0; display:grid; align-content:center; gap:3px; }.subsonic-track-name { font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }.subsonic-track-artist,.subsonic-track-album,.subsonic-track-source { font-size:.85rem; opacity:.7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.subsonic-empty { padding:16px; text-align:center; opacity:.65; font-size:.9rem; }
-.subsonic-controls { display:flex; justify-content:center; gap:10px; }.subsonic-ctrl-btn { display:grid; place-items:center; width:38px; height:38px; background:var(--lumiverse-bg-elevated, #303030); }.subsonic-ctrl-btn svg,.subsonic-search-item-btn svg { width:20px; height:20px; fill:currentColor; }.subsonic-ctrl-btn-main { width:46px; height:46px; border-radius:50%; background:var(--lumiverse-accent, #3182ce); }
-.subsonic-search-input { box-sizing:border-box; width:100%; padding:9px; color:inherit; background:var(--lumiverse-bg-elevated, #202020); border:1px solid var(--lumiverse-border, #3a3a3a); border-radius:6px; }.subsonic-search-results { margin-top:8px; display:grid; gap:4px; max-height:380px; overflow-y:auto; }
-.subsonic-search-item { display:flex; align-items:center; gap:9px; padding:7px; border-radius:6px; }.subsonic-search-item:hover { background:var(--lumiverse-bg-elevated, #252525); }.subsonic-search-item-art { width:38px; height:38px; object-fit:cover; border-radius:4px; }.subsonic-search-item-info { min-width:0; flex:1; }.subsonic-search-item-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }.subsonic-search-item-artist { font-size:.8rem; opacity:.7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }.subsonic-search-item-actions { display:flex; gap:4px; }.subsonic-search-item-btn { display:grid; place-items:center; background:transparent; width:32px; height:32px; }.subsonic-search-item-btn:hover { background:var(--lumiverse-border, #444); }
-.subsonic-lyrics-body { min-height:42px; max-height:340px; overflow-y:auto; white-space:pre-wrap; padding:10px; border-radius:8px; background:var(--lumiverse-bg-elevated, #202020); font-size:.9rem; line-height:1.55; opacity:.78; }.subsonic-lyrics-text { opacity:1; }.subsonic-lyrics-loading { font-style:italic; }
-.subsonic-float-widget { width:264px; height:72px; box-sizing:border-box; display:flex; align-items:center; gap:9px; padding:8px; color:var(--lumiverse-text, #eee); background:color-mix(in srgb, var(--lumiverse-bg-elevated, #202020) 92%, transparent); border:1px solid var(--lumiverse-border, #3a3a3a); border-radius:14px; box-shadow:0 8px 28px rgba(0,0,0,.28); backdrop-filter:blur(14px); cursor:pointer; user-select:none; }
-.subsonic-float-widget-artwork { width:54px; height:54px; flex:0 0 auto; position:relative; overflow:hidden; border-radius:10px; background:var(--lumiverse-bg, #151515); }.subsonic-float-widget-art { width:100%; height:100%; object-fit:cover; }.subsonic-float-widget-fallback { width:100%; height:100%; display:grid; place-items:center; color:var(--lumiverse-accent, #65b8ff); }.subsonic-float-widget-fallback svg { width:26px; height:26px; }.subsonic-float-widget-details { min-width:0; flex:1; display:grid; gap:4px; }.subsonic-float-widget-track,.subsonic-float-widget-artist { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }.subsonic-float-widget-track { font-size:.88rem; font-weight:700; }.subsonic-float-widget-artist { font-size:.75rem; opacity:.68; }.subsonic-float-widget-controls { display:flex; flex:0 0 auto; align-items:center; gap:1px; }.subsonic-float-widget-button { width:28px; height:32px; display:grid; place-items:center; padding:0; border:0; border-radius:7px; color:inherit; background:transparent; cursor:pointer; }.subsonic-float-widget-button:hover:not(:disabled) { background:var(--lumiverse-border, #444); }.subsonic-float-widget-button:disabled { cursor:default; opacity:.4; }.subsonic-float-widget-button svg { width:18px; height:18px; }
-/* The shared Spotify widgets are reused directly. Subsonic's Jukebox API has
-   no device, volume, or seek endpoint, so suppress only those affordances. */
-.spotify-mini-volume-row,.spotify-modern-widget-volume-row { display:none !important; }.spotify-mini-progress-bar,.spotify-modern-widget-progress-bar { cursor:default; pointer-events:none; }
-`;
-
 // src/ui/spotify-widget-styles.ts
 var SPOTIFY_WIDGET_CSS = `
 @property --spotify-modern-marquee-left-fade {
@@ -2247,22 +2212,22 @@ var SPOTIFY_WIDGET_CSS = `
 // src/ui/settings.ts
 function createSettingsUI(sendToBackend) {
   const root = document.createElement("section");
-  root.className = "subsonic-settings-card";
+  root.className = "spotify-settings-card";
   const header = document.createElement("header");
-  header.className = "subsonic-settings-card-header";
+  header.className = "spotify-settings-card-header";
   const title = document.createElement("h3");
   title.textContent = "Subsonic Controls";
   const status = document.createElement("span");
-  status.className = "subsonic-status";
+  status.className = "spotify-status";
   header.append(title, status);
   const body = document.createElement("div");
-  body.className = "subsonic-settings-card-body";
+  body.className = "spotify-settings-card-body";
   const makeField = (label, type, placeholder) => {
     const wrapper = document.createElement("label");
-    wrapper.className = "subsonic-settings-label";
+    wrapper.className = "spotify-settings-label";
     wrapper.textContent = label;
     const input = document.createElement("input");
-    input.className = "subsonic-input";
+    input.className = "spotify-input";
     input.type = type;
     input.placeholder = placeholder;
     wrapper.appendChild(input);
@@ -2273,7 +2238,7 @@ function createSettingsUI(sendToBackend) {
   const username = makeField("Username", "text", "Subsonic username");
   const password = makeField("Password", "password", "Subsonic password");
   const jukeboxLabel = document.createElement("label");
-  jukeboxLabel.className = "subsonic-settings-label";
+  jukeboxLabel.className = "spotify-settings-label";
   const jukebox = document.createElement("input");
   jukebox.type = "checkbox";
   jukebox.style.marginRight = "8px";
@@ -2282,30 +2247,35 @@ function createSettingsUI(sendToBackend) {
   note.style.cssText = "font-size:0.8em;opacity:0.65;margin-top:4px";
   note.textContent = "Search, now-playing and lyrics work with compatible servers. Play, pause, skip and queue require the optional Jukebox endpoint and affect that server-side player.";
   jukeboxLabel.appendChild(note);
+  const jukeboxUnavailable = document.createElement("div");
+  jukeboxUnavailable.style.cssText = "display:none;font-size:0.8em;color:#e74c3c;margin-top:4px";
+  jukeboxLabel.appendChild(jukeboxUnavailable);
   body.appendChild(jukeboxLabel);
   const actions = document.createElement("div");
-  actions.className = "subsonic-settings-row";
+  actions.className = "spotify-settings-row";
   const button = document.createElement("button");
-  button.className = "subsonic-btn subsonic-btn-primary";
+  button.className = "spotify-btn spotify-btn-primary";
   actions.appendChild(button);
   body.appendChild(actions);
   root.append(header, body);
   let isConnected = false;
-  function update(connected, url, user, hasPassword, enableJukebox) {
+  function update(connected, url, user, hasPassword, enableJukebox, jukeboxUnavailableReason) {
     isConnected = connected;
     if (url)
       serverUrl.value = url;
     if (user)
       username.value = user;
     jukebox.checked = enableJukebox;
+    jukeboxUnavailable.textContent = jukeboxUnavailableReason || "";
+    jukeboxUnavailable.style.display = jukeboxUnavailableReason ? "" : "none";
     for (const input of [serverUrl, username, password, jukebox])
       input.disabled = connected;
     password.value = "";
     password.placeholder = hasPassword ? "Saved securely (re-enter to change)" : "Subsonic password";
     button.textContent = connected ? "Disconnect" : "Connect";
-    button.className = connected ? "subsonic-btn subsonic-btn-danger" : "subsonic-btn subsonic-btn-primary";
+    button.className = connected ? "spotify-btn spotify-btn-danger" : "spotify-btn spotify-btn-primary";
     button.disabled = false;
-    status.innerHTML = connected ? '<span class="subsonic-status-dot connected"></span>Connected' : '<span class="subsonic-status-dot disconnected"></span>Not connected';
+    status.innerHTML = connected ? '<span class="spotify-status-dot connected"></span>Connected' : '<span class="spotify-status-dot disconnected"></span>Not connected';
   }
   button.addEventListener("click", () => {
     if (isConnected) {
@@ -2316,14 +2286,14 @@ function createSettingsUI(sendToBackend) {
     const user = username.value.trim();
     const pass = password.value;
     if (!url || !user || !pass) {
-      status.innerHTML = '<span class="subsonic-status-dot disconnected"></span><span style="color:#e74c3c">Server URL, username and password are required</span>';
+      status.innerHTML = '<span class="spotify-status-dot disconnected"></span><span style="color:#e74c3c">Server URL, username and password are required</span>';
       return;
     }
     button.disabled = true;
     button.textContent = "Connecting…";
     sendToBackend({ type: "connect", serverUrl: url, username: user, password: pass, enableJukebox: jukebox.checked });
   });
-  update(false, "", "", false, false);
+  update(false, "", "", false, false, null);
   return { root, update, setConnecting() {
     button.disabled = true;
     button.textContent = "Connecting…";
@@ -2447,27 +2417,27 @@ function createCrossfadeArt(className) {
 // src/ui/now-playing.ts
 function createNowPlayingUI() {
   const root = document.createElement("div");
-  root.className = "subsonic-section";
+  root.className = "spotify-section";
   const title = document.createElement("h3");
-  title.className = "subsonic-section-title";
+  title.className = "spotify-section-title";
   title.textContent = "Now Playing";
   const body = document.createElement("div");
-  body.className = "subsonic-now-playing";
-  const art = createCrossfadeArt("subsonic-album-art");
+  body.className = "spotify-now-playing";
+  const art = createCrossfadeArt("spotify-album-art");
   const info = document.createElement("div");
-  info.className = "subsonic-track-info";
+  info.className = "spotify-track-info";
   const track = document.createElement("div");
-  track.className = "subsonic-track-name";
+  track.className = "spotify-track-name";
   const artist = document.createElement("div");
-  artist.className = "subsonic-track-artist";
+  artist.className = "spotify-track-artist";
   const album = document.createElement("div");
-  album.className = "subsonic-track-album";
+  album.className = "spotify-track-album";
   const source = document.createElement("div");
-  source.className = "subsonic-track-source";
+  source.className = "spotify-track-device";
   info.append(track, artist, album, source);
   body.append(art.el, info);
   const empty = document.createElement("div");
-  empty.className = "subsonic-empty";
+  empty.className = "spotify-empty";
   root.append(title, body, empty);
   return { root, update(state, connected) {
     if (!connected) {
@@ -2504,20 +2474,20 @@ var PAUSE = `<svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/
 var NEXT = `<svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>`;
 function createControlsUI(send) {
   const root = document.createElement("div");
-  root.className = "subsonic-section";
+  root.className = "spotify-section";
   const title = document.createElement("h3");
-  title.className = "subsonic-section-title";
+  title.className = "spotify-section-title";
   title.textContent = "Jukebox Controls";
   const row = document.createElement("div");
-  row.className = "subsonic-controls";
+  row.className = "spotify-controls";
   const button = (icon, className = "") => {
     const element = document.createElement("button");
-    element.className = `subsonic-ctrl-btn ${className}`;
+    element.className = `spotify-ctrl-btn ${className}`;
     element.innerHTML = icon;
     return element;
   };
   const previous = button(PREVIOUS);
-  const playPause = button(PLAY, "subsonic-ctrl-btn-main");
+  const playPause = button(PLAY, "spotify-ctrl-btn-main");
   const next = button(NEXT);
   previous.onclick = () => send({ type: "previous" });
   next.onclick = () => send({ type: "next" });
@@ -2525,8 +2495,8 @@ function createControlsUI(send) {
   playPause.onclick = () => send({ type: isPlaying ? "pause" : "play" });
   row.append(previous, playPause, next);
   root.append(title, row);
-  return { root, update(state, connected) {
-    root.style.display = connected ? "" : "none";
+  return { root, update(state, connected, jukeboxEnabled) {
+    root.style.display = connected && jukeboxEnabled ? "" : "none";
     isPlaying = !!state?.isPlaying;
     playPause.innerHTML = isPlaying ? PAUSE : PLAY;
   }, destroy() {
@@ -2539,15 +2509,15 @@ var PLAY2 = `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`;
 var QUEUE = `<svg viewBox="0 0 24 24"><path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/></svg>`;
 function createSearchUI(send) {
   const root = document.createElement("div");
-  root.className = "subsonic-section";
+  root.className = "spotify-section";
   const title = document.createElement("h3");
-  title.className = "subsonic-section-title";
+  title.className = "spotify-section-title";
   title.textContent = "Library Search";
   const input = document.createElement("input");
-  input.className = "subsonic-search-input";
+  input.className = "spotify-search-input";
   input.placeholder = "Search your server's music library…";
   const list = document.createElement("div");
-  list.className = "subsonic-search-results";
+  list.className = "spotify-search-results";
   root.append(title, input, list);
   let timer = null;
   input.oninput = () => {
@@ -2565,39 +2535,39 @@ function createSearchUI(send) {
     list.innerHTML = "";
     if (!results.length) {
       const empty = document.createElement("div");
-      empty.className = "subsonic-empty";
+      empty.className = "spotify-empty";
       empty.textContent = "No tracks found";
       list.appendChild(empty);
       return;
     }
     for (const result of results) {
       const item = document.createElement("div");
-      item.className = "subsonic-search-item";
+      item.className = "spotify-search-item";
       if (result.albumArtUrl) {
         const image = document.createElement("img");
-        image.className = "subsonic-search-item-art";
+        image.className = "spotify-search-item-art";
         image.src = result.albumArtUrl;
         image.alt = result.album;
         item.appendChild(image);
       }
       const info = document.createElement("div");
-      info.className = "subsonic-search-item-info";
+      info.className = "spotify-search-item-info";
       const name = document.createElement("div");
-      name.className = "subsonic-search-item-name";
+      name.className = "spotify-search-item-name";
       name.textContent = result.name;
       const detail = document.createElement("div");
-      detail.className = "subsonic-search-item-artist";
+      detail.className = "spotify-search-item-artist";
       detail.textContent = `${result.artist} — ${result.album}`;
       info.append(name, detail);
       const actions = document.createElement("div");
-      actions.className = "subsonic-search-item-actions";
+      actions.className = "spotify-search-item-actions";
       const play = document.createElement("button");
-      play.className = "subsonic-search-item-btn";
+      play.className = "spotify-search-item-btn";
       play.title = "Play in server Jukebox";
       play.innerHTML = PLAY2;
       play.onclick = () => send({ type: "play", trackUri: result.uri });
       const queue = document.createElement("button");
-      queue.className = "subsonic-search-item-btn";
+      queue.className = "spotify-search-item-btn";
       queue.title = "Add to server Jukebox queue";
       queue.innerHTML = QUEUE;
       queue.onclick = () => send({ type: "queue", trackUri: result.uri });
@@ -2616,15 +2586,15 @@ function createSearchUI(send) {
 // src/ui/lyrics.ts
 function createLyricsUI() {
   const root = document.createElement("section");
-  root.className = "subsonic-section subsonic-lyrics-section";
+  root.className = "spotify-section spotify-lyrics-section";
   const title = document.createElement("h3");
-  title.className = "subsonic-section-title";
+  title.className = "spotify-section-title";
   title.textContent = "Lyrics";
   const body = document.createElement("div");
-  body.className = "subsonic-lyrics-body";
+  body.className = "spotify-lyrics-body";
   root.append(title, body);
   const show = (text, className = "") => {
-    body.className = `subsonic-lyrics-body ${className}`.trim();
+    body.className = `spotify-lyrics-body ${className}`.trim();
     body.textContent = text;
   };
   return {
@@ -2633,14 +2603,14 @@ function createLyricsUI() {
       if (instrumental)
         show("Instrumental");
       else if (syncedLyrics || plainLyrics)
-        show(syncedLyrics || plainLyrics || "", "subsonic-lyrics-text");
+        show(syncedLyrics || plainLyrics || "", "spotify-lyrics-text");
       else
         show("No lyrics are available for this track.");
     },
     updatePlayback(_state) {},
     setLoading(loading) {
       if (loading)
-        show("Loading lyrics…", "subsonic-lyrics-loading");
+        show("Loading lyrics…", "spotify-lyrics-status-loading");
     },
     clear() {
       show("");
@@ -4329,8 +4299,7 @@ var WIDGET_EDGE_PAD = 12;
 var WIDGET_PREFS_KEY = "subsonic-controls-widget-prefs";
 function setup(ctx) {
   const cleanups = [];
-  cleanups.push(ctx.dom.addStyle(`${PANEL_CSS}
-${SPOTIFY_WIDGET_CSS}`));
+  cleanups.push(ctx.dom.addStyle(SPOTIFY_WIDGET_CSS));
   const send = (message) => ctx.sendToBackend(message);
   const settings = createSettingsUI(send);
   const settingsMount = ctx.ui.mount("settings_extensions");
@@ -4346,10 +4315,25 @@ ${SPOTIFY_WIDGET_CSS}`));
     iconSvg: NOTE_ICON
   });
   cleanups.push(() => tab.destroy());
-  tab.root.classList.add("subsonic-tab-root");
+  tab.root.classList.add("spotify-tab-root");
   const panel = document.createElement("div");
-  panel.className = "subsonic-panel";
+  panel.className = "spotify-panel";
   tab.root.appendChild(panel);
+  function updateTabHeight() {
+    const top = tab.root.getBoundingClientRect().top;
+    const parentBottom = tab.root.parentElement?.getBoundingClientRect().bottom ?? window.innerHeight;
+    const viewportBottom = window.visualViewport?.height ?? window.innerHeight;
+    const bottom = Math.min(parentBottom, viewportBottom);
+    tab.root.style.setProperty("--spotify-tab-height", `${Math.max(240, bottom - top - 2)}px`);
+  }
+  updateTabHeight();
+  const tabHeightObserver = new ResizeObserver(updateTabHeight);
+  tabHeightObserver.observe(tab.root);
+  window.addEventListener("resize", updateTabHeight);
+  cleanups.push(() => {
+    tabHeightObserver.disconnect();
+    window.removeEventListener("resize", updateTabHeight);
+  });
   const nowPlaying = createNowPlayingUI();
   const controls = createControlsUI(send);
   const search = createSearchUI(send);
@@ -4554,14 +4538,15 @@ ${SPOTIFY_WIDGET_CSS}`));
       case "config":
         connected = message.connected;
         jukeboxEnabled = message.enableJukebox;
-        settings.update(message.connected, message.serverUrl, message.username, message.hasPassword, message.enableJukebox);
+        settings.update(message.connected, message.serverUrl, message.username, message.hasPassword, message.enableJukebox, message.jukeboxUnavailableReason);
+        controls.update(currentState, connected, jukeboxEnabled);
         syncWidget();
         break;
       case "state":
         connected = message.connected;
         currentState = message.playbackState;
         nowPlaying.update(currentState, connected);
-        controls.update(currentState, connected);
+        controls.update(currentState, connected, jukeboxEnabled);
         lyrics.updatePlayback(currentState);
         if (currentState?.trackUri && currentState.trackUri !== lyricsTrackId) {
           lyricsTrackId = currentState.trackUri;
@@ -4589,7 +4574,7 @@ ${SPOTIFY_WIDGET_CSS}`));
         lyricsTrackId = null;
         jukeboxEnabled = false;
         nowPlaying.update(null, false);
-        controls.update(null, false);
+        controls.update(null, false, false);
         lyrics.clear();
         miniPlayer.updateLyrics(null, null, null, false);
         modernWidget.updateLyrics(null, null, null, false);
@@ -4639,9 +4624,9 @@ ${SPOTIFY_WIDGET_CSS}`));
     currentState = null;
     lyricsTrackId = null;
     jukeboxEnabled = false;
-    settings.update(false, "", "", false, false);
+    settings.update(false, "", "", false, false, null);
     nowPlaying.update(null, false);
-    controls.update(null, false);
+    controls.update(null, false, false);
     lyrics.clear();
     syncWidget();
   });
