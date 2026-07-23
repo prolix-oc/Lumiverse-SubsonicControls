@@ -53,6 +53,7 @@ function getLineClassName(index: number, activeLineIndex: number, hasText: boole
 export function createLyricsUI(): LyricsUI {
   const root = document.createElement("div");
   root.className = "spotify-section spotify-lyrics-section";
+  root.dataset.transport = "false";
   const title = document.createElement("h3");
   title.className = "spotify-section-title";
   title.textContent = "Lyrics";
@@ -71,6 +72,10 @@ export function createLyricsUI(): LyricsUI {
   let isAutoScrolling = false;
   let lastUserScrollAt = 0;
   let autoScrollSuspended = false;
+
+  function supportsTransport(state: PlaybackState | null): boolean {
+    return state?.source === "feishin" || state?.source === "jukebox";
+  }
 
   function stopLoadingState() {
     if (loadingTimer) clearTimeout(loadingTimer);
@@ -117,10 +122,10 @@ export function createLyricsUI(): LyricsUI {
       autoScrollTimer = setTimeout(stopAutoScrollTracking, 700);
     }
   }
-  function updateActiveLine() {
-    if (syncedLines.length && syncedLyricsModel.refreshActiveLineIndex()) {
-      updateLineClasses(syncedLyricsModel.getActiveLineIndex());
-    }
+  function updateActiveLine(forceCenter = false) {
+    if (!syncedLines.length) return;
+    const changed = syncedLyricsModel.refreshActiveLineIndex();
+    if (changed || forceCenter) updateLineClasses(syncedLyricsModel.getActiveLineIndex(), forceCenter);
   }
   function startTicking() {
     if (!tickTimer && syncedLines.length) tickTimer = setInterval(updateActiveLine, 200);
@@ -134,6 +139,7 @@ export function createLyricsUI(): LyricsUI {
     syncedLyricsModel.clear();
     playback = null;
     activeLineIndex = -1;
+    root.dataset.transport = "false";
   }
   function setLoading(loading: boolean, playbackState?: PlaybackState | null) {
     stopLoadingState();
@@ -221,6 +227,9 @@ export function createLyricsUI(): LyricsUI {
     }
   }
   function updatePlayback(state: PlaybackState | null) {
+    const nextTransportState = String(supportsTransport(state));
+    const transportChanged = root.dataset.transport !== nextTransportState;
+    root.dataset.transport = nextTransportState;
     if (!state || state.trackUri !== currentTrackUri) {
       playback = null;
       syncedLyricsModel.setPlayback(null);
@@ -231,6 +240,11 @@ export function createLyricsUI(): LyricsUI {
     syncedLyricsModel.setPlayback(playback);
     updateActiveLine();
     if (state.isPlaying) startTicking(); else stopTicking();
+    if (transportChanged && syncedLines.length) {
+      // The read-only layout has a larger lyric viewport. Re-center after it
+      // has been applied so the active-line transition stays at its midpoint.
+      requestAnimationFrame(() => updateActiveLine(true));
+    }
   }
   return {
     root, update, updatePlayback, setLoading,

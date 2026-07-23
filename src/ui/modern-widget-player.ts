@@ -150,6 +150,7 @@ export function createModernWidgetPlayerUI(
   const root = document.createElement("div");
   root.className = "spotify-modern-widget-player";
   root.dataset.expanded = "false";
+  root.dataset.transport = "false";
 
   const compact = document.createElement("div");
   compact.className = "spotify-modern-widget-compact";
@@ -691,6 +692,8 @@ export function createModernWidgetPlayerUI(
     currentDuration = playbackState.durationMs;
     lastIsPlaying = playbackState.isPlaying;
     const canUseTransport = supportsMiniPlayerTransport();
+    const transportChanged = root.dataset.transport !== String(canUseTransport);
+    root.dataset.transport = String(canUseTransport);
     controls.style.display = canUseTransport ? "flex" : "none";
     controls.hidden = !canUseTransport;
     prevBtn.disabled = !canUseTransport;
@@ -726,6 +729,11 @@ export function createModernWidgetPlayerUI(
       else updateActiveLyricLine();
     } else if (lyricsTrack.childElementCount === 0) {
       renderLyrics();
+    }
+    if (transportChanged && syncedLyricsModel.hasLyrics() && playbackState.trackUri === lyricsTrackUri) {
+      // Wait for the controls-aware grid to settle before re-centering the
+      // active lyric in the resized viewport.
+      requestAnimationFrame(() => requestAnimationFrame(() => updateSyncedLyricsPresentation(true)));
     }
     scheduleMarqueeRefresh(metadataChanged);
     if (playbackState.isPlaying) startTicking();

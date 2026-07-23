@@ -521,6 +521,8 @@ export const SPOTIFY_WIDGET_CSS = `
   --spotify-modern-widget-collapsed-size: 48px;
   --spotify-modern-widget-empty-expanded-width: 300px;
   --spotify-modern-widget-empty-expanded-height: 196px;
+  --spotify-modern-lyrics-body-min-height: 132px;
+  --spotify-modern-lyrics-body-max-height: 176px;
   --spotify-modern-expanded-surface: var(--lcs-glass-bg, var(--lumiverse-bg-elevated));
   --spotify-modern-expanded-surface-alt: var(--lcs-glass-bg-hover, var(--lumiverse-bg));
   --spotify-modern-widget-motion-duration: 420ms;
@@ -681,6 +683,17 @@ export const SPOTIFY_WIDGET_CSS = `
 .spotify-modern-widget-player[data-empty="true"] .spotify-modern-widget-expanded {
   grid-template-rows: auto 1fr;
   gap: 12px;
+}
+
+/* Read-only now-playing mode has no transport row. Reclaim its 58px button
+   height plus the adjacent grid gap for the lyrics viewport. */
+.spotify-modern-widget-player[data-empty="false"][data-transport="false"] {
+  --spotify-modern-lyrics-body-min-height: 200px;
+  --spotify-modern-lyrics-body-max-height: 244px;
+}
+
+.spotify-modern-widget-player[data-empty="false"][data-transport="false"] .spotify-modern-widget-expanded {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
 .spotify-modern-widget-header,
@@ -910,8 +923,8 @@ export const SPOTIFY_WIDGET_CSS = `
 }
 
 .spotify-modern-widget-lyrics-body {
-  min-height: 132px;
-  max-height: 176px;
+  min-height: var(--spotify-modern-lyrics-body-min-height);
+  max-height: var(--spotify-modern-lyrics-body-max-height);
   display: block;
   gap: 4px;
   overflow-y: auto;
@@ -1792,6 +1805,16 @@ export const SPOTIFY_WIDGET_CSS = `
   box-sizing: border-box;
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 40px, black calc(100% - 56px), transparent 100%);
   mask-image: linear-gradient(to bottom, transparent 0, black 40px, black calc(100% - 56px), transparent 100%);
+}
+
+/* When the tab has no remote transport controls, don't keep the extra tail
+   that was reserved for them. Its re-centered active line now uses the full
+   read-only lyric viewport. */
+.spotify-lyrics-section[data-transport="false"] .spotify-lyrics-has-content {
+  padding-bottom: 36px;
+  scroll-padding-bottom: 36px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 40px, black calc(100% - 32px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, black 40px, black calc(100% - 32px), transparent 100%);
 }
 
 .spotify-lyrics-status {

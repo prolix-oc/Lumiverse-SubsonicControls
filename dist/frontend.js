@@ -522,6 +522,8 @@ var SPOTIFY_WIDGET_CSS = `
   --spotify-modern-widget-collapsed-size: 48px;
   --spotify-modern-widget-empty-expanded-width: 300px;
   --spotify-modern-widget-empty-expanded-height: 196px;
+  --spotify-modern-lyrics-body-min-height: 132px;
+  --spotify-modern-lyrics-body-max-height: 176px;
   --spotify-modern-expanded-surface: var(--lcs-glass-bg, var(--lumiverse-bg-elevated));
   --spotify-modern-expanded-surface-alt: var(--lcs-glass-bg-hover, var(--lumiverse-bg));
   --spotify-modern-widget-motion-duration: 420ms;
@@ -682,6 +684,17 @@ var SPOTIFY_WIDGET_CSS = `
 .spotify-modern-widget-player[data-empty="true"] .spotify-modern-widget-expanded {
   grid-template-rows: auto 1fr;
   gap: 12px;
+}
+
+/* Read-only now-playing mode has no transport row. Reclaim its 58px button
+   height plus the adjacent grid gap for the lyrics viewport. */
+.spotify-modern-widget-player[data-empty="false"][data-transport="false"] {
+  --spotify-modern-lyrics-body-min-height: 200px;
+  --spotify-modern-lyrics-body-max-height: 244px;
+}
+
+.spotify-modern-widget-player[data-empty="false"][data-transport="false"] .spotify-modern-widget-expanded {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
 .spotify-modern-widget-header,
@@ -911,8 +924,8 @@ var SPOTIFY_WIDGET_CSS = `
 }
 
 .spotify-modern-widget-lyrics-body {
-  min-height: 132px;
-  max-height: 176px;
+  min-height: var(--spotify-modern-lyrics-body-min-height);
+  max-height: var(--spotify-modern-lyrics-body-max-height);
   display: block;
   gap: 4px;
   overflow-y: auto;
@@ -1793,6 +1806,16 @@ var SPOTIFY_WIDGET_CSS = `
   box-sizing: border-box;
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 40px, black calc(100% - 56px), transparent 100%);
   mask-image: linear-gradient(to bottom, transparent 0, black 40px, black calc(100% - 56px), transparent 100%);
+}
+
+/* When the tab has no remote transport controls, don't keep the extra tail
+   that was reserved for them. Its re-centered active line now uses the full
+   read-only lyric viewport. */
+.spotify-lyrics-section[data-transport="false"] .spotify-lyrics-has-content {
+  padding-bottom: 36px;
+  scroll-padding-bottom: 36px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 40px, black calc(100% - 32px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, black 40px, black calc(100% - 32px), transparent 100%);
 }
 
 .spotify-lyrics-status {
@@ -2811,6 +2834,7 @@ function getLineClassName(index, activeLineIndex, hasText) {
 function createLyricsUI() {
   const root = document.createElement("div");
   root.className = "spotify-section spotify-lyrics-section";
+  root.dataset.transport = "false";
   const title = document.createElement("h3");
   title.className = "spotify-section-title";
   title.textContent = "Lyrics";
@@ -2828,6 +2852,9 @@ function createLyricsUI() {
   let isAutoScrolling = false;
   let lastUserScrollAt = 0;
   let autoScrollSuspended = false;
+  function supportsTransport(state) {
+    return state?.source === "feishin" || state?.source === "jukebox";
+  }
   function stopLoadingState() {
     if (loadingTimer)
       clearTimeout(loadingTimer);
@@ -2879,10 +2906,12 @@ function createLyricsUI() {
       autoScrollTimer = setTimeout(stopAutoScrollTracking, 700);
     }
   }
-  function updateActiveLine() {
-    if (syncedLines.length && syncedLyricsModel.refreshActiveLineIndex()) {
-      updateLineClasses(syncedLyricsModel.getActiveLineIndex());
-    }
+  function updateActiveLine(forceCenter = false) {
+    if (!syncedLines.length)
+      return;
+    const changed = syncedLyricsModel.refreshActiveLineIndex();
+    if (changed || forceCenter)
+      updateLineClasses(syncedLyricsModel.getActiveLineIndex(), forceCenter);
   }
   function startTicking() {
     if (!tickTimer && syncedLines.length)
@@ -2899,6 +2928,7 @@ function createLyricsUI() {
     syncedLyricsModel.clear();
     playback = null;
     activeLineIndex = -1;
+    root.dataset.transport = "false";
   }
   function setLoading(loading, playbackState) {
     stopLoadingState();
@@ -2993,6 +3023,9 @@ function createLyricsUI() {
     }
   }
   function updatePlayback(state) {
+    const nextTransportState = String(supportsTransport(state));
+    const transportChanged = root.dataset.transport !== nextTransportState;
+    root.dataset.transport = nextTransportState;
     if (!state || state.trackUri !== currentTrackUri) {
       playback = null;
       syncedLyricsModel.setPlayback(null);
@@ -3006,6 +3039,9 @@ function createLyricsUI() {
       startTicking();
     else
       stopTicking();
+    if (transportChanged && syncedLines.length) {
+      requestAnimationFrame(() => updateActiveLine(true));
+    }
   }
   return {
     root,
@@ -4023,6 +4059,7 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
   const root = document.createElement("div");
   root.className = "spotify-modern-widget-player";
   root.dataset.expanded = "false";
+  root.dataset.transport = "false";
   const compact = document.createElement("div");
   compact.className = "spotify-modern-widget-compact";
   const compactArt = createCrossfadeArt("spotify-modern-widget-compact-art");
@@ -4507,6 +4544,8 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
     currentDuration = playbackState.durationMs;
     lastIsPlaying = playbackState.isPlaying;
     const canUseTransport = supportsMiniPlayerTransport();
+    const transportChanged = root.dataset.transport !== String(canUseTransport);
+    root.dataset.transport = String(canUseTransport);
     controls.style.display = canUseTransport ? "flex" : "none";
     controls.hidden = !canUseTransport;
     prevBtn.disabled = !canUseTransport;
@@ -4541,6 +4580,9 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
         updateActiveLyricLine();
     } else if (lyricsTrack.childElementCount === 0) {
       renderLyrics();
+    }
+    if (transportChanged && syncedLyricsModel.hasLyrics() && playbackState.trackUri === lyricsTrackUri) {
+      requestAnimationFrame(() => requestAnimationFrame(() => updateSyncedLyricsPresentation(true)));
     }
     scheduleMarqueeRefresh(metadataChanged);
     if (playbackState.isPlaying)
