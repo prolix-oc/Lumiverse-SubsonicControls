@@ -595,11 +595,10 @@ export function createModernWidgetPlayerUI(
     }
   }
 
-  // The full player owns remote transport. The mini player is deliberately
-  // display-only for Jukebox and Feishin, whose compact-control capabilities
-  // do not include this complete transport/volume surface.
+  // Base Subsonic now-playing data is read-only. Jukebox and Feishin are the
+  // two remote sources that can relay transport commands from the mini player.
   function supportsMiniPlayerTransport(): boolean {
-    return state?.source !== "feishin" && state?.source !== "jukebox";
+    return state?.source === "feishin" || state?.source === "jukebox";
   }
 
   prevBtn.addEventListener("click", () => {

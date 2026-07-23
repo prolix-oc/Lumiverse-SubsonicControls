@@ -440,11 +440,10 @@ export function createMiniPlayerUI(
 
   // ─── Event handlers ────────────────────────────────────────────────
 
-  // The server-side Jukebox and Feishin Remote do not expose the complete
-  // mini-player control surface. Keep those commands in the full player and
-  // make the compact popup display-only for either remote source.
+  // Base Subsonic now-playing data is read-only. Jukebox and Feishin are the
+  // two remote sources that can relay transport commands from the mini player.
   function supportsMiniPlayerTransport(): boolean {
-    return currentState?.source !== "feishin" && currentState?.source !== "jukebox";
+    return currentState?.source === "feishin" || currentState?.source === "jukebox";
   }
 
   prevBtn.addEventListener("click", (e) => {

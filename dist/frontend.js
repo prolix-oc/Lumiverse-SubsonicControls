@@ -3541,7 +3541,7 @@ function createMiniPlayerUI(sendToBackend, onExpandClick, getWidgetRect) {
     }
   }
   function supportsMiniPlayerTransport() {
-    return currentState?.source !== "feishin" && currentState?.source !== "jukebox";
+    return currentState?.source === "feishin" || currentState?.source === "jukebox";
   }
   prevBtn.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -4394,7 +4394,7 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
     }
   }
   function supportsMiniPlayerTransport() {
-    return state?.source !== "feishin" && state?.source !== "jukebox";
+    return state?.source === "feishin" || state?.source === "jukebox";
   }
   prevBtn.addEventListener("click", () => {
     if (supportsMiniPlayerTransport())
