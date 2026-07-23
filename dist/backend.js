@@ -696,11 +696,15 @@ async function sendConfig(userId) {
   send({ type: "config", serverUrl: config?.serverUrl || "", username: config?.username || "", hasPassword: !!config?.password, remoteControl: config?.remoteControl || "none", feishinUrl: config?.feishinUrl || "", feishinUsername: config?.feishinUsername || "", hasFeishinPassword: !!config?.feishinPassword, playbackPositionOffsetMs: config?.playbackPositionOffsetMs ?? DEFAULT_PLAYBACK_POSITION_OFFSET_MS, jukeboxUnavailableReason: jukeboxUnavailableReasons.get(userId) || null, connected: !!config }, userId);
 }
 async function updateTheme(colors, userId) {
-  if (!colors) {
-    await spindle.theme.clear(userId).catch(() => {});
-    return;
+  try {
+    if (!colors) {
+      await spindle.theme.clear(userId);
+      return;
+    }
+    await spindle.theme.applyPalette({ accent: colors.dominantHsl }, userId);
+  } catch (error) {
+    spindle.log.warn(`Album theme: ${error?.message || error}`);
   }
-  await spindle.theme.apply({ variables: { "--lumiverse-primary": `hsl(${colors.dominantHsl.h}, ${Math.max(35, colors.dominantHsl.s)}%, ${colors.isLight ? 35 : 55}%)` } }, userId).catch(() => {});
 }
 spindle.onFrontendMessage(async (raw, userId) => {
   const message = raw;

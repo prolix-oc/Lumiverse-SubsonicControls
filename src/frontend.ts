@@ -346,11 +346,11 @@ export function setup(ctx: SpindleFrontendContext) {
     if (!currentState) {
       return { width: Math.max(280, Math.min(320, window.innerWidth - 24)), height: 196 };
     }
-    // A freshly opened desktop pop-out can still report the compact viewport.
-    // Preserve the expanded baseline so the lyrics player has room to animate.
+    // Keep the modern player compact enough for the original floating-widget
+    // footprint while still leaving room for the lyric animation viewport.
     return {
-      width: Math.max(320, Math.min(368, window.innerWidth - 24)),
-      height: Math.max(500, Math.min(600, window.innerHeight - 24)),
+      width: Math.max(300, Math.min(348, window.innerWidth - 24)),
+      height: Math.max(420, Math.min(520, window.innerHeight - 24)),
     };
   }
 

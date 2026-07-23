@@ -246,11 +246,19 @@ async function sendConfig(userId: string): Promise<void> {
 }
 
 async function updateTheme(colors: AlbumColors | null, userId: string): Promise<void> {
-  if (!colors) {
-    await (spindle.theme as typeof spindle.theme & { clear(targetUserId?: string): Promise<void> }).clear(userId).catch(() => {});
-    return;
+  try {
+    if (!colors) {
+      await spindle.theme.clear(userId);
+      return;
+    }
+
+    // Register the album-derived accent as a host-managed palette rather
+    // than a raw CSS override. This lets Lumiverse expose it in the Theme
+    // panel and derive mode-aware colors while retaining user preferences.
+    await spindle.theme.applyPalette({ accent: colors.dominantHsl }, userId);
+  } catch (error: any) {
+    spindle.log.warn(`Album theme: ${error?.message || error}`);
   }
-  await spindle.theme.apply({ variables: { "--lumiverse-primary": `hsl(${colors.dominantHsl.h}, ${Math.max(35, colors.dominantHsl.s)}%, ${colors.isLight ? 35 : 55}%)` } }, userId).catch(() => {});
 }
 
 spindle.onFrontendMessage(async (raw, userId) => {
