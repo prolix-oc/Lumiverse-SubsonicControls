@@ -2,6 +2,11 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 import type { AlbumColors, BackendToFrontend, FrontendToBackend, MessageSongEntry, PlaybackState, SongSnapshot, SubsonicConfig } from "./types";
 import * as subsonic from "./subsonic-api";
+import {
+  createLyricsRequestCoordinator,
+  type LyricsRequestCoordinator,
+  type LyricsRequestTrack,
+} from "./lyrics-request-coordinator";
 
 type StoredConfig = Omit<SubsonicConfig, "password">;
 const POLL_PLAYING_MS = 1_000;
@@ -10,8 +15,10 @@ const pollingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pollingUsers = new Set<string>();
 const stateByUser = new Map<string, PlaybackState | null>();
 const stateObservedAt = new Map<string, number>();
+const lyricsRequestsByUser = new Map<string, LyricsRequestCoordinator<subsonic.LyricsData>>();
 const jukeboxUnavailableReasons = new Map<string, string>();
 const jukeboxAvailabilityChecked = new Set<string>();
+let activeUserId: string | null = null;
 
 function send(message: BackendToFrontend, userId: string): void { spindle.sendToFrontend(message, userId); }
 
@@ -26,8 +33,53 @@ async function loadUser(userId: string): Promise<boolean> {
   const config = await loadConfig(userId);
   subsonic.setConfig(userId, config);
   subsonic.setActiveUser(userId);
+  activeUserId = userId;
   if (config && await verifyConfiguredJukebox(config, userId)) await saveConfig(config, userId);
   return !!config;
+}
+
+function lyricsRequests(userId: string): LyricsRequestCoordinator<subsonic.LyricsData> {
+  let requests = lyricsRequestsByUser.get(userId);
+  if (!requests) {
+    requests = createLyricsRequestCoordinator((track) => subsonic.getLyrics(track.trackUri, userId));
+    lyricsRequestsByUser.set(userId, requests);
+  }
+  return requests;
+}
+
+function buildLyricsRequestTrack(state: PlaybackState): LyricsRequestTrack {
+  return {
+    trackUri: state.trackUri,
+    trackName: state.trackName,
+    artistName: state.artistName,
+    albumName: state.albumName,
+    durationMs: state.durationMs,
+  };
+}
+
+async function getLyricsForState(state: PlaybackState, userId: string): Promise<subsonic.LyricsData | null> {
+  const lyrics = await lyricsRequests(userId).get(buildLyricsRequestTrack(state));
+  if (stateByUser.get(userId)?.trackUri === state.trackUri) pushLyricsMacros(lyrics);
+  return lyrics;
+}
+
+function syncLyricsForTrackChange(userId: string, previousTrackUri: string | null, state: PlaybackState | null): void {
+  const trackUri = state?.trackUri ?? null;
+  if (trackUri === previousTrackUri) return;
+  if (!state || !trackUri) {
+    pushLyricsMacros(null);
+    return;
+  }
+
+  const cached = lyricsRequests(userId).peek(trackUri);
+  if (cached !== undefined) {
+    pushLyricsMacros(cached);
+    return;
+  }
+  // The macro cache is immediately correct for the new track, while the
+  // lyric document is fetched once in the background for all consumers.
+  pushLyricsMacros(null);
+  void getLyricsForState(state, userId);
 }
 
 async function saveConfig(config: SubsonicConfig, userId: string): Promise<void> {
@@ -87,6 +139,7 @@ async function pushState(userId: string): Promise<PlaybackState | null> {
   stateByUser.set(userId, state);
   stateObservedAt.set(userId, now);
   pushPlaybackMacros(state);
+  syncLyricsForTrackChange(userId, previousState?.trackUri ?? null, state);
   send({ type: "state", playbackState: state, connected: true }, userId);
   return state;
 }
@@ -162,6 +215,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
         subsonic.setConfig(userId, null);
         stateByUser.delete(userId);
         stateObservedAt.delete(userId);
+        lyricsRequestsByUser.get(userId)?.clear();
+        lyricsRequestsByUser.delete(userId);
         jukeboxUnavailableReasons.delete(userId);
         jukeboxAvailabilityChecked.delete(userId);
         pushPlaybackMacros(null);
@@ -179,8 +234,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "search": send({ type: "search_results", results: await subsonic.search(message.query, userId) }, userId); break;
       case "get_chat_songs": await sendChatSongs(message.chatId, userId); break;
       case "get_lyrics": {
-        const state = stateByUser.get(userId) || await subsonic.getPlaybackState(userId);
-        const lyrics = state ? await subsonic.getLyrics(state.trackUri, userId) : null;
+        const state = stateByUser.get(userId) || await pushState(userId);
+        const lyrics = state ? await getLyricsForState(state, userId) : null;
         send({
           type: "lyrics",
           trackUri: state?.trackUri || "",
@@ -288,7 +343,10 @@ spindle.permissions.onChanged(({ permission, granted }) => {
 // ─── Macros ──────────────────────────────────────────────────────────────
 
 async function getMacroPlaybackState(): Promise<PlaybackState | null> {
-  return subsonic.isConnected() ? subsonic.getPlaybackState().catch(() => null) : null;
+  // Prompt assembly must never wait for an HTTP request. `pushState` keeps
+  // this fresh every second and also refreshes the host's pushed macro cache.
+  const userId = activeUserId;
+  return userId ? stateByUser.get(userId) || null : null;
 }
 
 spindle.registerMacro({
@@ -350,7 +408,8 @@ spindle.registerMacro({
   returnType: "string",
   handler: (async () => {
     const state = await getMacroPlaybackState();
-    const lyrics = state ? await subsonic.getLyrics(state.trackUri).catch(() => null) : null;
+    const userId = activeUserId;
+    const lyrics = state && userId ? await getLyricsForState(state, userId) : null;
     if (!lyrics) return "No lyrics available";
     if (lyrics.instrumental) return "[Instrumental]";
     return lyrics.plainLyrics || "No lyrics available";
@@ -364,7 +423,8 @@ spindle.registerMacro({
   returnType: "boolean",
   handler: (async () => {
     const state = await getMacroPlaybackState();
-    const lyrics = state ? await subsonic.getLyrics(state.trackUri).catch(() => null) : null;
+    const userId = activeUserId;
+    const lyrics = state && userId ? await getLyricsForState(state, userId) : null;
     return !!lyrics && !lyrics.instrumental && !!(lyrics.syncedLyrics || lyrics.plainLyrics);
   }) as any,
 });
@@ -385,4 +445,14 @@ function pushPlaybackMacros(state: PlaybackState | null): void {
   spindle.updateMacroValue("subsonic_album_name", state.albumName);
   spindle.updateMacroValue("subsonic_album_art", state.albumArtUrl || "");
   spindle.updateMacroValue("subsonic_is_playing", String(state.isPlaying));
+}
+
+function pushLyricsMacros(lyrics: subsonic.LyricsData | null): void {
+  if (!lyrics || lyrics.instrumental) {
+    spindle.updateMacroValue("subsonic_lyrics", lyrics?.instrumental ? "[Instrumental]" : "No lyrics available");
+    spindle.updateMacroValue("subsonic_has_lyrics", "false");
+    return;
+  }
+  spindle.updateMacroValue("subsonic_lyrics", lyrics.plainLyrics || "No lyrics available");
+  spindle.updateMacroValue("subsonic_has_lyrics", String(!!(lyrics.syncedLyrics || lyrics.plainLyrics)));
 }

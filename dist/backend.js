@@ -255,6 +255,58 @@ async function getLyrics(trackId, userId) {
   return nativePlainLyrics ? { plainLyrics: nativePlainLyrics, syncedLyrics: null, instrumental: false } : lrclib;
 }
 
+// src/lyrics-request-coordinator.ts
+function createLyricsRequestCoordinator(load, maxEntries = 24) {
+  const cache = new Map;
+  const pending = new Map;
+  let generation = 0;
+  function remember(trackUri, data) {
+    if (cache.has(trackUri))
+      cache.delete(trackUri);
+    cache.set(trackUri, data);
+    while (cache.size > maxEntries) {
+      const oldestTrackUri = cache.keys().next().value;
+      if (!oldestTrackUri)
+        break;
+      cache.delete(oldestTrackUri);
+    }
+  }
+  function get(track) {
+    if (cache.has(track.trackUri))
+      return Promise.resolve(cache.get(track.trackUri) ?? null);
+    const existing = pending.get(track.trackUri);
+    if (existing)
+      return existing;
+    const requestGeneration = generation;
+    const request2 = load(track).then((data) => {
+      if (requestGeneration === generation)
+        remember(track.trackUri, data ?? null);
+      return data ?? null;
+    }).catch(() => {
+      if (requestGeneration === generation)
+        remember(track.trackUri, null);
+      return null;
+    }).finally(() => {
+      if (pending.get(track.trackUri) === request2)
+        pending.delete(track.trackUri);
+    });
+    pending.set(track.trackUri, request2);
+    return request2;
+  }
+  return {
+    get,
+    prefetch: get,
+    peek(trackUri) {
+      return cache.has(trackUri) ? cache.get(trackUri) ?? null : undefined;
+    },
+    clear() {
+      generation += 1;
+      cache.clear();
+      pending.clear();
+    }
+  };
+}
+
 // src/backend.ts
 var POLL_PLAYING_MS = 1000;
 var POLL_IDLE_MS = 1000;
@@ -262,8 +314,10 @@ var pollingTimers = new Map;
 var pollingUsers = new Set;
 var stateByUser = new Map;
 var stateObservedAt = new Map;
+var lyricsRequestsByUser = new Map;
 var jukeboxUnavailableReasons = new Map;
 var jukeboxAvailabilityChecked = new Set;
+var activeUserId2 = null;
 function send(message, userId) {
   spindle.sendToFrontend(message, userId);
 }
@@ -278,9 +332,49 @@ async function loadUser(userId) {
   const config = await loadConfig(userId);
   setConfig(userId, config);
   setActiveUser(userId);
+  activeUserId2 = userId;
   if (config && await verifyConfiguredJukebox(config, userId))
     await saveConfig(config, userId);
   return !!config;
+}
+function lyricsRequests(userId) {
+  let requests = lyricsRequestsByUser.get(userId);
+  if (!requests) {
+    requests = createLyricsRequestCoordinator((track) => getLyrics(track.trackUri, userId));
+    lyricsRequestsByUser.set(userId, requests);
+  }
+  return requests;
+}
+function buildLyricsRequestTrack(state) {
+  return {
+    trackUri: state.trackUri,
+    trackName: state.trackName,
+    artistName: state.artistName,
+    albumName: state.albumName,
+    durationMs: state.durationMs
+  };
+}
+async function getLyricsForState(state, userId) {
+  const lyrics = await lyricsRequests(userId).get(buildLyricsRequestTrack(state));
+  if (stateByUser.get(userId)?.trackUri === state.trackUri)
+    pushLyricsMacros(lyrics);
+  return lyrics;
+}
+function syncLyricsForTrackChange(userId, previousTrackUri, state) {
+  const trackUri = state?.trackUri ?? null;
+  if (trackUri === previousTrackUri)
+    return;
+  if (!state || !trackUri) {
+    pushLyricsMacros(null);
+    return;
+  }
+  const cached = lyricsRequests(userId).peek(trackUri);
+  if (cached !== undefined) {
+    pushLyricsMacros(cached);
+    return;
+  }
+  pushLyricsMacros(null);
+  getLyricsForState(state, userId);
 }
 async function saveConfig(config, userId) {
   await spindle.userStorage.setJson("config.json", { serverUrl: config.serverUrl, username: config.username, enableJukebox: config.enableJukebox }, { userId });
@@ -330,6 +424,7 @@ async function pushState(userId) {
   stateByUser.set(userId, state);
   stateObservedAt.set(userId, now);
   pushPlaybackMacros(state);
+  syncLyricsForTrackChange(userId, previousState?.trackUri ?? null, state);
   send({ type: "state", playbackState: state, connected: true }, userId);
   return state;
 }
@@ -397,6 +492,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
         setConfig(userId, null);
         stateByUser.delete(userId);
         stateObservedAt.delete(userId);
+        lyricsRequestsByUser.get(userId)?.clear();
+        lyricsRequestsByUser.delete(userId);
         jukeboxUnavailableReasons.delete(userId);
         jukeboxAvailabilityChecked.delete(userId);
         pushPlaybackMacros(null);
@@ -432,8 +529,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
         await sendChatSongs(message.chatId, userId);
         break;
       case "get_lyrics": {
-        const state = stateByUser.get(userId) || await getPlaybackState(userId);
-        const lyrics = state ? await getLyrics(state.trackUri, userId) : null;
+        const state = stateByUser.get(userId) || await pushState(userId);
+        const lyrics = state ? await getLyricsForState(state, userId) : null;
         send({
           type: "lyrics",
           trackUri: state?.trackUri || "",
@@ -530,7 +627,8 @@ spindle.permissions.onChanged(({ permission, granted }) => {
     setupGenerationCapture();
 });
 async function getMacroPlaybackState() {
-  return isConnected() ? getPlaybackState().catch(() => null) : null;
+  const userId = activeUserId2;
+  return userId ? stateByUser.get(userId) || null : null;
 }
 spindle.registerMacro({
   name: "subsonic_now_playing",
@@ -585,7 +683,8 @@ spindle.registerMacro({
   returnType: "string",
   handler: async () => {
     const state = await getMacroPlaybackState();
-    const lyrics = state ? await getLyrics(state.trackUri).catch(() => null) : null;
+    const userId = activeUserId2;
+    const lyrics = state && userId ? await getLyricsForState(state, userId) : null;
     if (!lyrics)
       return "No lyrics available";
     if (lyrics.instrumental)
@@ -600,7 +699,8 @@ spindle.registerMacro({
   returnType: "boolean",
   handler: async () => {
     const state = await getMacroPlaybackState();
-    const lyrics = state ? await getLyrics(state.trackUri).catch(() => null) : null;
+    const userId = activeUserId2;
+    const lyrics = state && userId ? await getLyricsForState(state, userId) : null;
     return !!lyrics && !lyrics.instrumental && !!(lyrics.syncedLyrics || lyrics.plainLyrics);
   }
 });
@@ -620,4 +720,13 @@ function pushPlaybackMacros(state) {
   spindle.updateMacroValue("subsonic_album_name", state.albumName);
   spindle.updateMacroValue("subsonic_album_art", state.albumArtUrl || "");
   spindle.updateMacroValue("subsonic_is_playing", String(state.isPlaying));
+}
+function pushLyricsMacros(lyrics) {
+  if (!lyrics || lyrics.instrumental) {
+    spindle.updateMacroValue("subsonic_lyrics", lyrics?.instrumental ? "[Instrumental]" : "No lyrics available");
+    spindle.updateMacroValue("subsonic_has_lyrics", "false");
+    return;
+  }
+  spindle.updateMacroValue("subsonic_lyrics", lyrics.plainLyrics || "No lyrics available");
+  spindle.updateMacroValue("subsonic_has_lyrics", String(!!(lyrics.syncedLyrics || lyrics.plainLyrics)));
 }
