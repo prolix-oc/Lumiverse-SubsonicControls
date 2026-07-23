@@ -6,6 +6,12 @@ import type { PlaybackState, SearchResult, SubsonicConfig } from "./types";
 type ApiResponse = { status: number; body: string };
 type SubsonicPayload = Record<string, any>;
 
+export interface LyricsData {
+  plainLyrics: string | null;
+  syncedLyrics: string | null;
+  instrumental: boolean;
+}
+
 const CLIENT_NAME = "LumiverseSubsonicControls";
 const API_VERSION = "1.16.1";
 const configs = new Map<string, SubsonicConfig>();
@@ -163,21 +169,69 @@ export async function next(userId?: string): Promise<void> { await jukebox("skip
 export async function previous(userId?: string): Promise<void> { await jukebox("previous", {}, userId); }
 export async function addToQueue(trackId: string, userId?: string): Promise<void> { await jukebox("add", { id: trackId }, userId); }
 
-export async function getLyrics(trackId: string, userId?: string): Promise<string | null> {
+function toLrcTimestamp(startMs: number): string {
+  const totalCentiseconds = Math.max(0, Math.round(startMs / 10));
+  const minutes = Math.floor(totalCentiseconds / 6000);
+  const seconds = Math.floor((totalCentiseconds % 6000) / 100);
+  const centiseconds = totalCentiseconds % 100;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(centiseconds).padStart(2, "0")}`;
+}
+
+function parseStructuredLyrics(lines: unknown): LyricsData | null {
+  if (!Array.isArray(lines)) return null;
+  const parsed = lines
+    .map((line: any) => ({ start: Number(line?.start), value: typeof line?.value === "string" ? line.value.trim() : "" }))
+    .filter((line) => Number.isFinite(line.start));
+  if (parsed.length === 0) return null;
+  const plainLyrics = parsed.map((line) => line.value).filter(Boolean).join("\n").trim() || null;
+  const syncedLyrics = parsed.map((line) => `[${toLrcTimestamp(line.start)}]${line.value}`).join("\n");
+  return { plainLyrics, syncedLyrics, instrumental: false };
+}
+
+async function getLrclibLyrics(song: any): Promise<LyricsData | null> {
+  const title = typeof song?.title === "string" ? song.title.trim() : "";
+  const artist = typeof song?.artist === "string" ? song.artist.trim() : "";
+  if (!title || !artist) return null;
+  const params = new URLSearchParams({ track_name: title, artist_name: artist });
+  if (typeof song?.album === "string" && song.album.trim()) params.set("album_name", song.album.trim());
+  const duration = Number(song?.duration);
+  if (Number.isFinite(duration) && duration > 0) params.set("duration", String(Math.round(duration)));
+  try {
+    const result = await spindle.cors(`https://lrclib.net/api/get?${params.toString()}`, { method: "GET" }) as ApiResponse;
+    if (result.status !== 200) return null;
+    const data = JSON.parse(result.body) as { plainLyrics?: unknown; syncedLyrics?: unknown; instrumental?: unknown };
+    const plainLyrics = typeof data.plainLyrics === "string" && data.plainLyrics.trim() ? data.plainLyrics : null;
+    const syncedLyrics = typeof data.syncedLyrics === "string" && data.syncedLyrics.trim() ? data.syncedLyrics : null;
+    return plainLyrics || syncedLyrics || data.instrumental === true
+      ? { plainLyrics, syncedLyrics, instrumental: data.instrumental === true }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getLyrics(trackId: string, userId?: string): Promise<LyricsData | null> {
+  let song: any = null;
+  let nativePlainLyrics: string | null = null;
   try {
     const response = await request("getLyricsBySongId", { id: trackId }, userId);
-    const structured = response.lyricsList?.structuredLyrics?.[0]?.line;
-    if (Array.isArray(structured)) return structured.map((line: any) => line.value || "").join("\n").trim() || null;
+    const structured = parseStructuredLyrics(response.lyricsList?.structuredLyrics?.[0]?.line);
+    if (structured?.syncedLyrics) return structured;
     const plain = response.lyricsList?.lyrics?.[0]?.value;
-    if (typeof plain === "string" && plain.trim()) return plain;
+    if (typeof plain === "string" && plain.trim()) nativePlainLyrics = plain;
   } catch {
     // getLyricsBySongId is an OpenSubsonic extension; fall through to the
     // original Subsonic endpoint for older compatible servers.
   }
   try {
-    const song = (await request("getSong", { id: trackId }, userId)).song;
+    song = (await request("getSong", { id: trackId }, userId)).song;
     const response = await request("getLyrics", { artist: song?.artist, title: song?.title }, userId);
     const lyrics = response.lyrics?.value;
-    return typeof lyrics === "string" && lyrics.trim() ? lyrics : null;
-  } catch { return null; }
+    if (!nativePlainLyrics && typeof lyrics === "string" && lyrics.trim()) nativePlainLyrics = lyrics;
+  } catch {
+    // A server may support getLyricsBySongId but not the original lookup.
+  }
+  const lrclib = song ? await getLrclibLyrics(song) : null;
+  if (lrclib?.syncedLyrics) return { ...lrclib, plainLyrics: nativePlainLyrics || lrclib.plainLyrics };
+  return nativePlainLyrics ? { plainLyrics: nativePlainLyrics, syncedLyrics: null, instrumental: false } : lrclib;
 }

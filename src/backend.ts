@@ -148,7 +148,13 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "get_lyrics": {
         const state = stateByUser.get(userId) || await subsonic.getPlaybackState(userId);
         const lyrics = state ? await subsonic.getLyrics(state.trackUri, userId) : null;
-        send({ type: "lyrics", trackUri: state?.trackUri || "", plainLyrics: lyrics, syncedLyrics: null, instrumental: false }, userId);
+        send({
+          type: "lyrics",
+          trackUri: state?.trackUri || "",
+          plainLyrics: lyrics?.plainLyrics || null,
+          syncedLyrics: lyrics?.syncedLyrics || null,
+          instrumental: !!lyrics?.instrumental,
+        }, userId);
         break;
       }
       case "album_colors": await updateTheme(message.colors, userId); break;
@@ -311,7 +317,10 @@ spindle.registerMacro({
   returnType: "string",
   handler: (async () => {
     const state = await getMacroPlaybackState();
-    return state ? await subsonic.getLyrics(state.trackUri).catch(() => null) || "No lyrics available" : "No lyrics available";
+    const lyrics = state ? await subsonic.getLyrics(state.trackUri).catch(() => null) : null;
+    if (!lyrics) return "No lyrics available";
+    if (lyrics.instrumental) return "[Instrumental]";
+    return lyrics.plainLyrics || "No lyrics available";
   }) as any,
 });
 
@@ -322,7 +331,8 @@ spindle.registerMacro({
   returnType: "boolean",
   handler: (async () => {
     const state = await getMacroPlaybackState();
-    return !!(state && await subsonic.getLyrics(state.trackUri).catch(() => null));
+    const lyrics = state ? await subsonic.getLyrics(state.trackUri).catch(() => null) : null;
+    return !!lyrics && !lyrics.instrumental && !!(lyrics.syncedLyrics || lyrics.plainLyrics);
   }) as any,
 });
 

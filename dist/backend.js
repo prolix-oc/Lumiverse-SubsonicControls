@@ -167,25 +167,71 @@ async function previous(userId) {
 async function addToQueue(trackId, userId) {
   await jukebox("add", { id: trackId }, userId);
 }
-async function getLyrics(trackId, userId) {
-  try {
-    const response = await request("getLyricsBySongId", { id: trackId }, userId);
-    const structured = response.lyricsList?.structuredLyrics?.[0]?.line;
-    if (Array.isArray(structured))
-      return structured.map((line) => line.value || "").join(`
+function toLrcTimestamp(startMs) {
+  const totalCentiseconds = Math.max(0, Math.round(startMs / 10));
+  const minutes = Math.floor(totalCentiseconds / 6000);
+  const seconds = Math.floor(totalCentiseconds % 6000 / 100);
+  const centiseconds = totalCentiseconds % 100;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(centiseconds).padStart(2, "0")}`;
+}
+function parseStructuredLyrics(lines) {
+  if (!Array.isArray(lines))
+    return null;
+  const parsed = lines.map((line) => ({ start: Number(line?.start), value: typeof line?.value === "string" ? line.value.trim() : "" })).filter((line) => Number.isFinite(line.start));
+  if (parsed.length === 0)
+    return null;
+  const plainLyrics = parsed.map((line) => line.value).filter(Boolean).join(`
 `).trim() || null;
-    const plain = response.lyricsList?.lyrics?.[0]?.value;
-    if (typeof plain === "string" && plain.trim())
-      return plain;
-  } catch {}
+  const syncedLyrics = parsed.map((line) => `[${toLrcTimestamp(line.start)}]${line.value}`).join(`
+`);
+  return { plainLyrics, syncedLyrics, instrumental: false };
+}
+async function getLrclibLyrics(song) {
+  const title = typeof song?.title === "string" ? song.title.trim() : "";
+  const artist = typeof song?.artist === "string" ? song.artist.trim() : "";
+  if (!title || !artist)
+    return null;
+  const params = new URLSearchParams({ track_name: title, artist_name: artist });
+  if (typeof song?.album === "string" && song.album.trim())
+    params.set("album_name", song.album.trim());
+  const duration = Number(song?.duration);
+  if (Number.isFinite(duration) && duration > 0)
+    params.set("duration", String(Math.round(duration)));
   try {
-    const song = (await request("getSong", { id: trackId }, userId)).song;
-    const response = await request("getLyrics", { artist: song?.artist, title: song?.title }, userId);
-    const lyrics = response.lyrics?.value;
-    return typeof lyrics === "string" && lyrics.trim() ? lyrics : null;
+    const result = await spindle.cors(`https://lrclib.net/api/get?${params.toString()}`, { method: "GET" });
+    if (result.status !== 200)
+      return null;
+    const data = JSON.parse(result.body);
+    const plainLyrics = typeof data.plainLyrics === "string" && data.plainLyrics.trim() ? data.plainLyrics : null;
+    const syncedLyrics = typeof data.syncedLyrics === "string" && data.syncedLyrics.trim() ? data.syncedLyrics : null;
+    return plainLyrics || syncedLyrics || data.instrumental === true ? { plainLyrics, syncedLyrics, instrumental: data.instrumental === true } : null;
   } catch {
     return null;
   }
+}
+async function getLyrics(trackId, userId) {
+  let song = null;
+  let nativePlainLyrics = null;
+  try {
+    const response = await request("getLyricsBySongId", { id: trackId }, userId);
+    const structured = parseStructuredLyrics(response.lyricsList?.structuredLyrics?.[0]?.line);
+    if (structured?.syncedLyrics)
+      return structured;
+    const plain = response.lyricsList?.lyrics?.[0]?.value;
+    if (typeof plain === "string" && plain.trim())
+      nativePlainLyrics = plain;
+  } catch {}
+  try {
+    song = (await request("getSong", { id: trackId }, userId)).song;
+    const response = await request("getLyrics", { artist: song?.artist, title: song?.title }, userId);
+    const lyrics = response.lyrics?.value;
+    if (!nativePlainLyrics && typeof lyrics === "string" && lyrics.trim())
+      nativePlainLyrics = lyrics;
+  } catch {}
+  const lrclib = song ? await getLrclibLyrics(song) : null;
+  if (lrclib?.syncedLyrics)
+    return { ...lrclib, plainLyrics: nativePlainLyrics || lrclib.plainLyrics };
+  return nativePlainLyrics ? { plainLyrics: nativePlainLyrics, syncedLyrics: null, instrumental: false } : lrclib;
 }
 
 // src/backend.ts
@@ -347,7 +393,13 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "get_lyrics": {
         const state = stateByUser.get(userId) || await getPlaybackState(userId);
         const lyrics = state ? await getLyrics(state.trackUri, userId) : null;
-        send({ type: "lyrics", trackUri: state?.trackUri || "", plainLyrics: lyrics, syncedLyrics: null, instrumental: false }, userId);
+        send({
+          type: "lyrics",
+          trackUri: state?.trackUri || "",
+          plainLyrics: lyrics?.plainLyrics || null,
+          syncedLyrics: lyrics?.syncedLyrics || null,
+          instrumental: !!lyrics?.instrumental
+        }, userId);
         break;
       }
       case "album_colors":
@@ -492,7 +544,12 @@ spindle.registerMacro({
   returnType: "string",
   handler: async () => {
     const state = await getMacroPlaybackState();
-    return state ? await getLyrics(state.trackUri).catch(() => null) || "No lyrics available" : "No lyrics available";
+    const lyrics = state ? await getLyrics(state.trackUri).catch(() => null) : null;
+    if (!lyrics)
+      return "No lyrics available";
+    if (lyrics.instrumental)
+      return "[Instrumental]";
+    return lyrics.plainLyrics || "No lyrics available";
   }
 });
 spindle.registerMacro({
@@ -502,7 +559,8 @@ spindle.registerMacro({
   returnType: "boolean",
   handler: async () => {
     const state = await getMacroPlaybackState();
-    return !!(state && await getLyrics(state.trackUri).catch(() => null));
+    const lyrics = state ? await getLyrics(state.trackUri).catch(() => null) : null;
+    return !!lyrics && !lyrics.instrumental && !!(lyrics.syncedLyrics || lyrics.plainLyrics);
   }
 });
 function pushPlaybackMacros(state) {
