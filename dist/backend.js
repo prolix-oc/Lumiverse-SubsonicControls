@@ -255,6 +255,189 @@ async function getLyrics(trackId, userId) {
   return nativePlainLyrics ? { plainLyrics: nativePlainLyrics, syncedLyrics: null, instrumental: false } : lrclib;
 }
 
+// src/feishin-remote.ts
+function asRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function text(value, fallback = "") {
+  return typeof value === "string" ? value : fallback;
+}
+function number(value, fallback = 0) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+function webSocketUrl(value) {
+  const url = new URL(value.includes("://") ? value : `http://${value}`);
+  if (url.protocol === "http:")
+    url.protocol = "ws:";
+  else if (url.protocol === "https:")
+    url.protocol = "wss:";
+  if (url.protocol !== "ws:" && url.protocol !== "wss:")
+    throw new Error("Feishin Remote URL must use HTTP, HTTPS, WS, or WSS.");
+  return url.toString();
+}
+
+class FeishinRemoteClient {
+  onState;
+  onError;
+  socket = null;
+  state = null;
+  status = "stopped";
+  positionSeconds = 0;
+  volume = null;
+  reconnectTimer = null;
+  reconnectAttempt = 0;
+  stopped = true;
+  lastPublishedAt = 0;
+  publishTimer = null;
+  config = null;
+  constructor(onState, onError) {
+    this.onState = onState;
+    this.onError = onError;
+  }
+  connect(url, username, password) {
+    const normalizedUrl = webSocketUrl(url);
+    if (this.config?.url === normalizedUrl && this.socket?.readyState === WebSocket.OPEN)
+      return;
+    this.disconnect(false);
+    this.stopped = false;
+    this.config = { url: normalizedUrl, username, password };
+    this.reconnectAttempt = 0;
+    this.open();
+  }
+  disconnect(clear = true) {
+    this.stopped = true;
+    if (this.reconnectTimer)
+      clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    if (this.publishTimer)
+      clearTimeout(this.publishTimer);
+    this.publishTimer = null;
+    const socket = this.socket;
+    this.socket = null;
+    socket?.close(1000, "Disconnected by user");
+    if (clear) {
+      this.config = null;
+      this.state = null;
+      this.onState(null, false);
+    }
+  }
+  send(event, data = {}) {
+    if (this.socket?.readyState !== WebSocket.OPEN)
+      return this.onError("Feishin Remote is not connected.");
+    this.socket.send(JSON.stringify({ event, ...data }));
+  }
+  open() {
+    const config = this.config;
+    if (!config || this.stopped)
+      return;
+    try {
+      const socket = new WebSocket(config.url);
+      this.socket = socket;
+      socket.onopen = () => {
+        if (socket !== this.socket)
+          return;
+        this.reconnectAttempt = 0;
+        this.onState(this.state, true);
+        if (config.username || config.password) {
+          socket.send(JSON.stringify({ event: "authenticate", header: `Basic ${btoa(`${config.username}:${config.password}`)}` }));
+        }
+      };
+      socket.onmessage = (event) => this.receive(event.data);
+      socket.onerror = () => this.onError("Feishin Remote connection failed.");
+      socket.onclose = () => {
+        if (socket !== this.socket)
+          return;
+        this.socket = null;
+        this.state = null;
+        this.onState(null, false);
+        this.scheduleReconnect();
+      };
+    } catch (error) {
+      this.onError(error instanceof Error ? error.message : "Could not connect to Feishin Remote.");
+      this.scheduleReconnect();
+    }
+  }
+  scheduleReconnect() {
+    if (this.stopped || !this.config || this.reconnectTimer)
+      return;
+    const seconds = [2, 4, 8, 16, 30][Math.min(this.reconnectAttempt++, 4)];
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.open();
+    }, seconds * 1000);
+  }
+  receive(raw) {
+    try {
+      const message = JSON.parse(typeof raw === "string" ? raw : "");
+      const event = text(message.event);
+      if (event === "error")
+        return this.onError(text(message.data, "Feishin Remote error."));
+      const data = asRecord(message.data);
+      if (event === "state")
+        this.replaceState(data);
+      else if (event === "song")
+        this.setSong(data);
+      else if (event === "playback")
+        this.status = text(message.data, this.status);
+      else if (event === "position")
+        this.positionSeconds = number(message.data, this.positionSeconds);
+      else if (event === "volume")
+        this.volume = number(message.data, this.volume ?? 0);
+      else if (event === "proxy" && this.state && typeof message.data === "string")
+        this.state = { ...this.state, albumArtUrl: `data:image/jpeg;base64,${message.data}` };
+      if (event === "position")
+        this.publishSoon();
+      else
+        this.publish();
+    } catch {
+      this.onError("Feishin sent an invalid Remote response.");
+    }
+  }
+  replaceState(data) {
+    this.status = text(data.status, "stopped");
+    this.positionSeconds = number(data.position);
+    this.volume = number(data.volume);
+    this.setSong(asRecord(data.song), false);
+  }
+  setSong(song, publish = true) {
+    const id = text(song.id);
+    this.state = id ? {
+      trackUri: id,
+      trackName: text(song.name, "Unknown track"),
+      artistName: text(song.artistName, "Unknown artist"),
+      albumName: text(song.album, "Unknown album"),
+      albumArtUrl: null,
+      durationMs: Math.max(0, number(song.duration)),
+      progressMs: Math.max(0, this.positionSeconds * 1000),
+      positionKnown: true,
+      isPlaying: this.status.toLowerCase() === "playing",
+      source: "feishin",
+      deviceName: "Feishin Desktop",
+      volume: this.volume
+    } : null;
+    if (id)
+      this.send("proxy");
+    if (publish)
+      this.publish();
+  }
+  publish() {
+    if (this.publishTimer)
+      clearTimeout(this.publishTimer);
+    this.publishTimer = null;
+    this.lastPublishedAt = Date.now();
+    if (this.state)
+      this.state = { ...this.state, isPlaying: this.status.toLowerCase() === "playing", progressMs: Math.max(0, this.positionSeconds * 1000), volume: this.volume };
+    this.onState(this.state, this.socket?.readyState === WebSocket.OPEN);
+  }
+  publishSoon() {
+    const delay = Math.max(0, 250 - (Date.now() - this.lastPublishedAt));
+    if (delay === 0)
+      return this.publish();
+    if (!this.publishTimer)
+      this.publishTimer = setTimeout(() => this.publish(), delay);
+  }
+}
+
 // src/lyrics-request-coordinator.ts
 function createLyricsRequestCoordinator(load, maxEntries = 24) {
   const cache = new Map;
@@ -317,9 +500,34 @@ var stateObservedAt = new Map;
 var lyricsRequestsByUser = new Map;
 var jukeboxUnavailableReasons = new Map;
 var jukeboxAvailabilityChecked = new Set;
+var feishinClients = new Map;
 var activeUserId2 = null;
 function send(message, userId) {
   spindle.sendToFrontend(message, userId);
+}
+function stopFeishin(userId) {
+  feishinClients.get(userId)?.disconnect();
+  feishinClients.delete(userId);
+}
+function updateFeishinState(userId, state) {
+  const previousState = stateByUser.get(userId);
+  stateByUser.set(userId, state);
+  stateObservedAt.set(userId, Date.now());
+  pushPlaybackMacros(state);
+  syncLyricsForTrackChange(userId, previousState?.trackUri ?? null, state);
+  send({ type: "state", playbackState: state, connected: isConnected(userId) }, userId);
+}
+function startFeishin(config, userId) {
+  stopFeishin(userId);
+  if (config.remoteControl !== "feishin" || !config.feishinUrl)
+    return;
+  const client = new FeishinRemoteClient((state) => updateFeishinState(userId, state), (message) => spindle.log.warn(`Feishin Remote (${userId}): ${message}`));
+  feishinClients.set(userId, client);
+  try {
+    client.connect(config.feishinUrl, config.feishinUsername, config.feishinPassword);
+  } catch (error) {
+    spindle.log.warn(`Feishin Remote (${userId}) could not start: ${error?.message || error}`);
+  }
 }
 async function loadConfig(userId) {
   const stored = await spindle.userStorage.getJson("config.json", { fallback: { serverUrl: "", username: "", enableJukebox: false, remoteControl: "none", feishinUrl: "", feishinUsername: "" }, userId });
@@ -477,6 +685,11 @@ spindle.onFrontendMessage(async (raw, userId) => {
     switch (message.type) {
       case "get_config":
         await sendConfig(userId);
+        {
+          const config = await loadConfig(userId);
+          if (config?.remoteControl === "feishin" && !feishinClients.has(userId))
+            startFeishin(config, userId);
+        }
         if (isConnected(userId)) {
           await pushState(userId);
           if ((await loadConfig(userId))?.remoteControl !== "feishin")
@@ -498,6 +711,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (config.enableJukebox)
           await verifyConfiguredJukebox(config, userId);
         await saveConfig(config, userId);
+        startFeishin(config, userId);
         send({ type: "connected" }, userId);
         await sendConfig(userId);
         if (config.remoteControl !== "feishin")
@@ -506,6 +720,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
       }
       case "disconnect":
         stopPolling(userId);
+        stopFeishin(userId);
         setConfig(userId, null);
         stateByUser.delete(userId);
         stateObservedAt.delete(userId);
@@ -522,28 +737,44 @@ spindle.onFrontendMessage(async (raw, userId) => {
         send({ type: "state", playbackState: null, connected: false }, userId);
         break;
       case "feishin_state":
-        stateByUser.set(userId, message.playbackState);
-        stateObservedAt.set(userId, Date.now());
-        pushPlaybackMacros(message.playbackState);
-        syncLyricsForTrackChange(userId, null, message.playbackState);
-        send({ type: "state", playbackState: message.playbackState, connected: isConnected(userId) }, userId);
+        updateFeishinState(userId, message.playbackState);
         break;
-      case "play":
-        await play(message.trackUri, userId);
-        await pushState(userId);
+      case "play": {
+        if ((await loadConfig(userId))?.remoteControl === "feishin")
+          feishinClients.get(userId)?.send("play");
+        else {
+          await play(message.trackUri, userId);
+          await pushState(userId);
+        }
         break;
-      case "pause":
-        await pause(userId);
-        await pushState(userId);
+      }
+      case "pause": {
+        if ((await loadConfig(userId))?.remoteControl === "feishin")
+          feishinClients.get(userId)?.send("pause");
+        else {
+          await pause(userId);
+          await pushState(userId);
+        }
         break;
-      case "next":
-        await next(userId);
-        await pushState(userId);
+      }
+      case "next": {
+        if ((await loadConfig(userId))?.remoteControl === "feishin")
+          feishinClients.get(userId)?.send("next");
+        else {
+          await next(userId);
+          await pushState(userId);
+        }
         break;
-      case "previous":
-        await previous(userId);
-        await pushState(userId);
+      }
+      case "previous": {
+        if ((await loadConfig(userId))?.remoteControl === "feishin")
+          feishinClients.get(userId)?.send("previous");
+        else {
+          await previous(userId);
+          await pushState(userId);
+        }
         break;
+      }
       case "queue":
         await addToQueue(message.trackUri, userId);
         break;

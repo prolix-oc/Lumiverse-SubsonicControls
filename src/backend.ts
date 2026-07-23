@@ -2,6 +2,7 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 import type { AlbumColors, BackendToFrontend, FrontendToBackend, MessageSongEntry, PlaybackState, SongSnapshot, SubsonicConfig } from "./types";
 import * as subsonic from "./subsonic-api";
+import { FeishinRemoteClient } from "./feishin-remote";
 import {
   createLyricsRequestCoordinator,
   type LyricsRequestCoordinator,
@@ -18,9 +19,39 @@ const stateObservedAt = new Map<string, number>();
 const lyricsRequestsByUser = new Map<string, LyricsRequestCoordinator<subsonic.LyricsData>>();
 const jukeboxUnavailableReasons = new Map<string, string>();
 const jukeboxAvailabilityChecked = new Set<string>();
+const feishinClients = new Map<string, FeishinRemoteClient>();
 let activeUserId: string | null = null;
 
 function send(message: BackendToFrontend, userId: string): void { spindle.sendToFrontend(message, userId); }
+
+function stopFeishin(userId: string): void {
+  feishinClients.get(userId)?.disconnect();
+  feishinClients.delete(userId);
+}
+
+function updateFeishinState(userId: string, state: PlaybackState | null): void {
+  const previousState = stateByUser.get(userId);
+  stateByUser.set(userId, state);
+  stateObservedAt.set(userId, Date.now());
+  pushPlaybackMacros(state);
+  syncLyricsForTrackChange(userId, previousState?.trackUri ?? null, state);
+  send({ type: "state", playbackState: state, connected: subsonic.isConnected(userId) }, userId);
+}
+
+function startFeishin(config: SubsonicConfig, userId: string): void {
+  stopFeishin(userId);
+  if (config.remoteControl !== "feishin" || !config.feishinUrl) return;
+  const client = new FeishinRemoteClient(
+    (state) => updateFeishinState(userId, state),
+    (message) => spindle.log.warn(`Feishin Remote (${userId}): ${message}`),
+  );
+  feishinClients.set(userId, client);
+  try {
+    client.connect(config.feishinUrl, config.feishinUsername, config.feishinPassword);
+  } catch (error: any) {
+    spindle.log.warn(`Feishin Remote (${userId}) could not start: ${error?.message || error}`);
+  }
+}
 
 async function loadConfig(userId: string): Promise<SubsonicConfig | null> {
   const stored = await spindle.userStorage.getJson("config.json", { fallback: { serverUrl: "", username: "", enableJukebox: false, remoteControl: "none", feishinUrl: "", feishinUsername: "" }, userId }) as StoredConfig;
@@ -196,6 +227,10 @@ spindle.onFrontendMessage(async (raw, userId) => {
     switch (message.type) {
       case "get_config":
         await sendConfig(userId);
+        {
+          const config = await loadConfig(userId);
+          if (config?.remoteControl === "feishin" && !feishinClients.has(userId)) startFeishin(config, userId);
+        }
         // The macro host can resolve templates before the drawer has issued
         // its follow-up get_state request. Prime the push cache as soon as a
         // persisted connection is loaded so track-detail macros are never
@@ -218,6 +253,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         jukeboxAvailabilityChecked.delete(userId);
         if (config.enableJukebox) await verifyConfiguredJukebox(config, userId);
         await saveConfig(config, userId);
+        startFeishin(config, userId);
         send({ type: "connected" }, userId);
         await sendConfig(userId);
         if (config.remoteControl !== "feishin") startPolling(userId);
@@ -225,6 +261,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
       }
       case "disconnect":
         stopPolling(userId);
+        stopFeishin(userId);
         subsonic.setConfig(userId, null);
         stateByUser.delete(userId);
         stateObservedAt.delete(userId);
@@ -241,16 +278,30 @@ spindle.onFrontendMessage(async (raw, userId) => {
         send({ type: "state", playbackState: null, connected: false }, userId);
         break;
       case "feishin_state":
-        stateByUser.set(userId, message.playbackState);
-        stateObservedAt.set(userId, Date.now());
-        pushPlaybackMacros(message.playbackState);
-        syncLyricsForTrackChange(userId, null, message.playbackState);
-        send({ type: "state", playbackState: message.playbackState, connected: subsonic.isConnected(userId) }, userId);
+        // Kept for compatibility with frontends built before the Remote client
+        // moved to the backend, where encrypted credentials are available.
+        updateFeishinState(userId, message.playbackState);
         break;
-      case "play": await subsonic.play(message.trackUri, userId); await pushState(userId); break;
-      case "pause": await subsonic.pause(userId); await pushState(userId); break;
-      case "next": await subsonic.next(userId); await pushState(userId); break;
-      case "previous": await subsonic.previous(userId); await pushState(userId); break;
+      case "play": {
+        if ((await loadConfig(userId))?.remoteControl === "feishin") feishinClients.get(userId)?.send("play");
+        else { await subsonic.play(message.trackUri, userId); await pushState(userId); }
+        break;
+      }
+      case "pause": {
+        if ((await loadConfig(userId))?.remoteControl === "feishin") feishinClients.get(userId)?.send("pause");
+        else { await subsonic.pause(userId); await pushState(userId); }
+        break;
+      }
+      case "next": {
+        if ((await loadConfig(userId))?.remoteControl === "feishin") feishinClients.get(userId)?.send("next");
+        else { await subsonic.next(userId); await pushState(userId); }
+        break;
+      }
+      case "previous": {
+        if ((await loadConfig(userId))?.remoteControl === "feishin") feishinClients.get(userId)?.send("previous");
+        else { await subsonic.previous(userId); await pushState(userId); }
+        break;
+      }
       case "queue": await subsonic.addToQueue(message.trackUri, userId); break;
       case "search": send({ type: "search_results", results: await subsonic.search(message.query, userId) }, userId); break;
       case "get_chat_songs": await sendChatSongs(message.chatId, userId); break;

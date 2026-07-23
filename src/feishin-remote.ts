@@ -25,6 +25,8 @@ export class FeishinRemoteClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
   private stopped = true;
+  private lastPublishedAt = 0;
+  private publishTimer: ReturnType<typeof setTimeout> | null = null;
   private config: { url: string; username: string; password: string } | null = null;
 
   constructor(private readonly onState: (state: PlaybackState | null, connected: boolean) => void, private readonly onError: (message: string) => void) {}
@@ -43,6 +45,8 @@ export class FeishinRemoteClient {
     this.stopped = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+    if (this.publishTimer) clearTimeout(this.publishTimer);
+    this.publishTimer = null;
     const socket = this.socket;
     this.socket = null;
     socket?.close(1000, "Disconnected by user");
@@ -105,7 +109,8 @@ export class FeishinRemoteClient {
       else if (event === "position") this.positionSeconds = number(message.data, this.positionSeconds);
       else if (event === "volume") this.volume = number(message.data, this.volume ?? 0);
       else if (event === "proxy" && this.state && typeof message.data === "string") this.state = { ...this.state, albumArtUrl: `data:image/jpeg;base64,${message.data}` };
-      this.publish();
+      if (event === "position") this.publishSoon();
+      else this.publish();
     } catch { this.onError("Feishin sent an invalid Remote response."); }
   }
 
@@ -137,7 +142,16 @@ export class FeishinRemoteClient {
   }
 
   private publish(): void {
+    if (this.publishTimer) clearTimeout(this.publishTimer);
+    this.publishTimer = null;
+    this.lastPublishedAt = Date.now();
     if (this.state) this.state = { ...this.state, isPlaying: this.status.toLowerCase() === "playing", progressMs: Math.max(0, this.positionSeconds * 1000), volume: this.volume };
     this.onState(this.state, this.socket?.readyState === WebSocket.OPEN);
+  }
+
+  private publishSoon(): void {
+    const delay = Math.max(0, 250 - (Date.now() - this.lastPublishedAt));
+    if (delay === 0) return this.publish();
+    if (!this.publishTimer) this.publishTimer = setTimeout(() => this.publish(), delay);
   }
 }

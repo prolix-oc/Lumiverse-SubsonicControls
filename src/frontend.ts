@@ -1,6 +1,5 @@
 import type { SpindleFrontendContext, SpindleFloatWidgetHandle } from "lumiverse-spindle-types";
 import type { AlbumColors, BackendToFrontend, FrontendToBackend, MiniPlayerStyle, PlaybackState, RemoteControl } from "./types";
-import { FeishinRemoteClient } from "./feishin-remote";
 import { SPOTIFY_WIDGET_CSS } from "./ui/spotify-widget-styles";
 import { createSettingsUI } from "./ui/settings";
 import { createNowPlayingUI } from "./ui/now-playing";
@@ -144,15 +143,7 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   let remoteControl: RemoteControl = "none";
-  let feishin: FeishinRemoteClient | null = null;
-  let pendingFeishinCredentials: { serverUrl: string; username: string; password: string } | null = null;
-  const settings = createSettingsUI((message) => {
-    const candidate = message as { type?: string; remoteControl?: RemoteControl; feishinUrl?: string; feishinUsername?: string; feishinPassword?: string };
-    if (candidate.type === "connect" && candidate.remoteControl === "feishin") {
-      pendingFeishinCredentials = { serverUrl: candidate.feishinUrl || "", username: candidate.feishinUsername || "", password: candidate.feishinPassword || "" };
-    }
-    send(message);
-  });
+  const settings = createSettingsUI(send);
   const settingsMount = ctx.ui.mount("settings_extensions");
   settingsMount.appendChild(settings.root);
   cleanups.push(() => settings.destroy());
@@ -187,14 +178,7 @@ export function setup(ctx: SpindleFrontendContext) {
   });
 
   const nowPlaying = createNowPlayingUI();
-  const sendPlayerCommand = (message: { type: "play" | "pause" | "next" | "previous"; trackUri?: string }) => {
-    if (remoteControl === "feishin") {
-      feishin?.send(message.type);
-      return;
-    }
-    send(message);
-  };
-  const controls = createControlsUI(sendPlayerCommand);
+  const controls = createControlsUI(send);
   const search = createSearchUI(send);
   const lyrics = createLyricsUI();
   panel.append(nowPlaying.root, controls.root, search.root, lyrics.root);
@@ -719,22 +703,6 @@ export function setup(ctx: SpindleFrontendContext) {
         configuredHasFeishinPassword = message.hasFeishinPassword;
         configuredJukeboxUnavailableReason = message.jukeboxUnavailableReason;
         settings.update(message.connected, message.serverUrl, message.username, message.hasPassword, message.remoteControl, message.feishinUrl, message.feishinUsername, message.hasFeishinPassword, message.jukeboxUnavailableReason);
-        if (message.remoteControl === "feishin" && message.feishinUrl) {
-          if (!feishin) {
-            feishin = new FeishinRemoteClient(
-              (state, isConnected) => send({ type: "feishin_state", playbackState: state, connected: isConnected }),
-              (error) => console.warn("[Subsonic Controls]", error),
-            );
-          }
-          const credentials = pendingFeishinCredentials?.serverUrl === message.feishinUrl
-            ? pendingFeishinCredentials
-            : { username: message.feishinUsername, password: "" };
-          pendingFeishinCredentials = null;
-          feishin.connect(message.feishinUrl, credentials.username, credentials.password);
-        } else {
-          feishin?.disconnect();
-          feishin = null;
-        }
         search.setAvailable(true);
         search.setPlaybackAvailable(message.remoteControl === "jukebox");
         controls.update(currentState, connected, message.remoteControl !== "none", message.remoteControl === "feishin" ? "Feishin Controls" : "Jukebox Controls");
@@ -784,7 +752,6 @@ export function setup(ctx: SpindleFrontendContext) {
         send({ type: "get_state" });
         break;
       case "disconnected":
-        feishin?.disconnect(); feishin = null;
         connected = false; currentState = null; lyricsTrackId = null; jukeboxEnabled = false;
         settings.update(false, configuredServerUrl, configuredUsername, configuredHasPassword, remoteControl, configuredFeishinUrl, configuredFeishinUsername, configuredHasFeishinPassword, null);
         search.setAvailable(true);
@@ -851,7 +818,6 @@ export function setup(ctx: SpindleFrontendContext) {
   });
   cleanups.push(permissionChange);
   cleanups.push(() => {
-    feishin?.disconnect();
     cancelPendingThemeClear();
     themeApplySeq += 1;
     for (const [requestId, pending] of pendingPaletteImages) {

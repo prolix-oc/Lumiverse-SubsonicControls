@@ -1,167 +1,3 @@
-// src/feishin-remote.ts
-function asRecord(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-}
-function text(value, fallback = "") {
-  return typeof value === "string" ? value : fallback;
-}
-function number(value, fallback = 0) {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-function webSocketUrl(value) {
-  const url = new URL(value.includes("://") ? value : `http://${value}`);
-  if (url.protocol === "http:")
-    url.protocol = "ws:";
-  else if (url.protocol === "https:")
-    url.protocol = "wss:";
-  if (url.protocol !== "ws:" && url.protocol !== "wss:")
-    throw new Error("Feishin Remote URL must use HTTP, HTTPS, WS, or WSS.");
-  return url.toString();
-}
-
-class FeishinRemoteClient {
-  onState;
-  onError;
-  socket = null;
-  state = null;
-  status = "stopped";
-  positionSeconds = 0;
-  volume = null;
-  reconnectTimer = null;
-  reconnectAttempt = 0;
-  stopped = true;
-  config = null;
-  constructor(onState, onError) {
-    this.onState = onState;
-    this.onError = onError;
-  }
-  connect(url, username, password) {
-    const normalizedUrl = webSocketUrl(url);
-    if (this.config?.url === normalizedUrl && this.socket?.readyState === WebSocket.OPEN)
-      return;
-    this.disconnect(false);
-    this.stopped = false;
-    this.config = { url: normalizedUrl, username, password };
-    this.reconnectAttempt = 0;
-    this.open();
-  }
-  disconnect(clear = true) {
-    this.stopped = true;
-    if (this.reconnectTimer)
-      clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
-    const socket = this.socket;
-    this.socket = null;
-    socket?.close(1000, "Disconnected by user");
-    if (clear) {
-      this.config = null;
-      this.state = null;
-      this.onState(null, false);
-    }
-  }
-  send(event, data = {}) {
-    if (this.socket?.readyState !== WebSocket.OPEN)
-      return this.onError("Feishin Remote is not connected.");
-    this.socket.send(JSON.stringify({ event, ...data }));
-  }
-  open() {
-    const config = this.config;
-    if (!config || this.stopped)
-      return;
-    try {
-      const socket = new WebSocket(config.url);
-      this.socket = socket;
-      socket.onopen = () => {
-        if (socket !== this.socket)
-          return;
-        this.reconnectAttempt = 0;
-        this.onState(this.state, true);
-        if (config.username || config.password) {
-          socket.send(JSON.stringify({ event: "authenticate", header: `Basic ${btoa(`${config.username}:${config.password}`)}` }));
-        }
-      };
-      socket.onmessage = (event) => this.receive(event.data);
-      socket.onerror = () => this.onError("Feishin Remote connection failed.");
-      socket.onclose = () => {
-        if (socket !== this.socket)
-          return;
-        this.socket = null;
-        this.state = null;
-        this.onState(null, false);
-        this.scheduleReconnect();
-      };
-    } catch (error) {
-      this.onError(error instanceof Error ? error.message : "Could not connect to Feishin Remote.");
-      this.scheduleReconnect();
-    }
-  }
-  scheduleReconnect() {
-    if (this.stopped || !this.config || this.reconnectTimer)
-      return;
-    const seconds = [2, 4, 8, 16, 30][Math.min(this.reconnectAttempt++, 4)];
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      this.open();
-    }, seconds * 1000);
-  }
-  receive(raw) {
-    try {
-      const message = JSON.parse(typeof raw === "string" ? raw : "");
-      const event = text(message.event);
-      if (event === "error")
-        return this.onError(text(message.data, "Feishin Remote error."));
-      const data = asRecord(message.data);
-      if (event === "state")
-        this.replaceState(data);
-      else if (event === "song")
-        this.setSong(data);
-      else if (event === "playback")
-        this.status = text(message.data, this.status);
-      else if (event === "position")
-        this.positionSeconds = number(message.data, this.positionSeconds);
-      else if (event === "volume")
-        this.volume = number(message.data, this.volume ?? 0);
-      else if (event === "proxy" && this.state && typeof message.data === "string")
-        this.state = { ...this.state, albumArtUrl: `data:image/jpeg;base64,${message.data}` };
-      this.publish();
-    } catch {
-      this.onError("Feishin sent an invalid Remote response.");
-    }
-  }
-  replaceState(data) {
-    this.status = text(data.status, "stopped");
-    this.positionSeconds = number(data.position);
-    this.volume = number(data.volume);
-    this.setSong(asRecord(data.song), false);
-  }
-  setSong(song, publish = true) {
-    const id = text(song.id);
-    this.state = id ? {
-      trackUri: id,
-      trackName: text(song.name, "Unknown track"),
-      artistName: text(song.artistName, "Unknown artist"),
-      albumName: text(song.album, "Unknown album"),
-      albumArtUrl: null,
-      durationMs: Math.max(0, number(song.duration)),
-      progressMs: Math.max(0, this.positionSeconds * 1000),
-      positionKnown: true,
-      isPlaying: this.status.toLowerCase() === "playing",
-      source: "feishin",
-      deviceName: "Feishin Desktop",
-      volume: this.volume
-    } : null;
-    if (id)
-      this.send("proxy");
-    if (publish)
-      this.publish();
-  }
-  publish() {
-    if (this.state)
-      this.state = { ...this.state, isPlaying: this.status.toLowerCase() === "playing", progressMs: Math.max(0, this.positionSeconds * 1000), volume: this.volume };
-    this.onState(this.state, this.socket?.readyState === WebSocket.OPEN);
-  }
-}
-
 // src/ui/spotify-widget-styles.ts
 var SPOTIFY_WIDGET_CSS = `
 @property --spotify-modern-marquee-left-fade {
@@ -2818,9 +2654,9 @@ function parseSyncedLyrics(value) {
     const timestamps = [...line.matchAll(/\[([^\]]+)\]/g)].map((match) => parseTimestamp(match[1])).filter((timeMs) => timeMs !== null);
     if (timestamps.length === 0)
       continue;
-    const text2 = line.replace(/(?:\[[^\]]+\])+/g, "").trim();
+    const text = line.replace(/(?:\[[^\]]+\])+/g, "").trim();
     for (const timeMs of timestamps)
-      parsed.push({ timeMs, text: text2 });
+      parsed.push({ timeMs, text });
   }
   const grouped = [];
   for (const line of parsed.sort((a, b) => a.timeMs - b.timeMs)) {
@@ -2834,12 +2670,12 @@ function parseSyncedLyrics(value) {
   }
   return grouped;
 }
-function getLineDisplayText(text2) {
-  return text2 || EMPTY_SYNCED_LINE_SYMBOL;
+function getLineDisplayText(text) {
+  return text || EMPTY_SYNCED_LINE_SYMBOL;
 }
-function shouldReserveScaleGutter(text2) {
-  return !text2.includes(`
-`) && text2.length >= 36;
+function shouldReserveScaleGutter(text) {
+  return !text.includes(`
+`) && text.length >= 36;
 }
 function createSyncedLyricsModel(maxLines) {
   let lyrics = [];
@@ -3108,10 +2944,10 @@ function createLyricsUI() {
   function renderPlainLyrics(value) {
     stopLoadingState();
     body.className = "spotify-lyrics-body spotify-lyrics-has-content";
-    const text2 = document.createElement("div");
-    text2.className = "spotify-lyrics-text spotify-lyrics-text-enter";
-    text2.textContent = value;
-    body.appendChild(text2);
+    const text = document.createElement("div");
+    text.className = "spotify-lyrics-text spotify-lyrics-text-enter";
+    text.textContent = value;
+    body.appendChild(text);
   }
   function update(trackUri, plainLyrics, syncedLyrics, instrumental) {
     stopTicking();
@@ -5122,15 +4958,7 @@ function setup(ctx) {
     });
   }
   let remoteControl = "none";
-  let feishin = null;
-  let pendingFeishinCredentials = null;
-  const settings = createSettingsUI((message) => {
-    const candidate = message;
-    if (candidate.type === "connect" && candidate.remoteControl === "feishin") {
-      pendingFeishinCredentials = { serverUrl: candidate.feishinUrl || "", username: candidate.feishinUsername || "", password: candidate.feishinPassword || "" };
-    }
-    send(message);
-  });
+  const settings = createSettingsUI(send);
   const settingsMount = ctx.ui.mount("settings_extensions");
   settingsMount.appendChild(settings.root);
   cleanups.push(() => settings.destroy());
@@ -5164,14 +4992,7 @@ function setup(ctx) {
     window.removeEventListener("resize", updateTabHeight);
   });
   const nowPlaying = createNowPlayingUI();
-  const sendPlayerCommand = (message) => {
-    if (remoteControl === "feishin") {
-      feishin?.send(message.type);
-      return;
-    }
-    send(message);
-  };
-  const controls = createControlsUI(sendPlayerCommand);
+  const controls = createControlsUI(send);
   const search = createSearchUI(send);
   const lyrics = createLyricsUI();
   panel.append(nowPlaying.root, controls.root, search.root, lyrics.root);
@@ -5675,17 +5496,6 @@ function setup(ctx) {
         configuredHasFeishinPassword = message.hasFeishinPassword;
         configuredJukeboxUnavailableReason = message.jukeboxUnavailableReason;
         settings.update(message.connected, message.serverUrl, message.username, message.hasPassword, message.remoteControl, message.feishinUrl, message.feishinUsername, message.hasFeishinPassword, message.jukeboxUnavailableReason);
-        if (message.remoteControl === "feishin" && message.feishinUrl) {
-          if (!feishin) {
-            feishin = new FeishinRemoteClient((state, isConnected) => send({ type: "feishin_state", playbackState: state, connected: isConnected }), (error) => console.warn("[Subsonic Controls]", error));
-          }
-          const credentials = pendingFeishinCredentials?.serverUrl === message.feishinUrl ? pendingFeishinCredentials : { username: message.feishinUsername, password: "" };
-          pendingFeishinCredentials = null;
-          feishin.connect(message.feishinUrl, credentials.username, credentials.password);
-        } else {
-          feishin?.disconnect();
-          feishin = null;
-        }
         search.setAvailable(true);
         search.setPlaybackAvailable(message.remoteControl === "jukebox");
         controls.update(currentState, connected, message.remoteControl !== "none", message.remoteControl === "feishin" ? "Feishin Controls" : "Jukebox Controls");
@@ -5738,8 +5548,6 @@ function setup(ctx) {
         send({ type: "get_state" });
         break;
       case "disconnected":
-        feishin?.disconnect();
-        feishin = null;
         connected = false;
         currentState = null;
         lyricsTrackId = null;
@@ -5817,7 +5625,6 @@ function setup(ctx) {
   });
   cleanups.push(permissionChange);
   cleanups.push(() => {
-    feishin?.disconnect();
     cancelPendingThemeClear();
     themeApplySeq += 1;
     for (const [requestId, pending] of pendingPaletteImages) {
