@@ -55,7 +55,13 @@ function responseError(payload) {
   if (!response || response.status === "ok")
     return null;
   const error = response.error || {};
-  return new Error(error.message || `Subsonic request failed${error.code ? ` (code ${error.code})` : ""}`);
+  return taggedError(error.message || `Subsonic request failed${error.code ? ` (code ${error.code})` : ""}`, Number(error.code) >= 40 && Number(error.code) <= 44);
+}
+function taggedError(message, authenticationFailure = false) {
+  return Object.assign(new Error(message), { authenticationFailure });
+}
+function isAuthenticationError(error) {
+  return error instanceof Error && error.authenticationFailure === true;
 }
 async function request(method, values = {}, userId) {
   const config = getConfig(userId);
@@ -76,7 +82,7 @@ async function request(method, values = {}, userId) {
     if (method === "jukeboxControl" && isJukeboxUnavailableStatus(result.status)) {
       throw new Error(`This server does not implement the optional Subsonic Jukebox endpoint (HTTP ${result.status}).`);
     }
-    throw new Error(`Subsonic ${method} failed (${result.status})`);
+    throw taggedError(`Subsonic ${method} failed (${result.status})`, result.status === 401 || result.status === 403);
   }
   let payload;
   try {
@@ -502,12 +508,16 @@ var DEFAULT_PLAYBACK_POSITION_OFFSET_MS = 1000;
 var MIN_PLAYBACK_POSITION_OFFSET_MS = -1e4;
 var MAX_PLAYBACK_POSITION_OFFSET_MS = 1e4;
 var ALBUM_PALETTE_CACHE_STORAGE_KEY = "album-palette-cache.json";
+var WIDGET_PREFS_STORAGE_KEY = "widget-preferences.json";
 var ALBUM_PALETTE_CACHE_LIMIT = 48;
 var pollingTimers = new Map;
 var pollingUsers = new Set;
 var stateByUser = new Map;
 var stateObservedAt = new Map;
 var stateRequestSequences = new Map;
+var connectionGenerations = new Map;
+var connectingUsers = new Map;
+var widgetPreferenceWrites = new Map;
 var lyricsRequestsByUser = new Map;
 var jukeboxUnavailableReasons = new Map;
 var jukeboxAvailabilityChecked = new Set;
@@ -515,6 +525,15 @@ var feishinClients = new Map;
 var albumPaletteCaches = new Map;
 var activeAlbumPaletteKeys = new Map;
 var activeUserId2 = null;
+function connectionGeneration(userId) {
+  return connectionGenerations.get(userId) || 0;
+}
+function advanceConnectionGeneration(userId) {
+  const generation = connectionGeneration(userId) + 1;
+  connectionGenerations.set(userId, generation);
+  stateRequestSequences.set(userId, (stateRequestSequences.get(userId) || 0) + 1);
+  return generation;
+}
 function send(message, userId) {
   spindle.sendToFrontend(message, userId);
 }
@@ -546,14 +565,37 @@ function startFeishin(config, userId) {
     spindle.log.warn(`Feishin Remote (${userId}) could not start: ${error?.message || error}`);
   }
 }
-async function loadConfig(userId) {
-  const stored = await spindle.userStorage.getJson("config.json", { fallback: { serverUrl: "", username: "", enableJukebox: false, remoteControl: "none", feishinUrl: "", feishinUsername: "", playbackPositionOffsetMs: DEFAULT_PLAYBACK_POSITION_OFFSET_MS }, userId });
+var DEFAULT_STORED_CONFIG = {
+  serverUrl: "",
+  username: "",
+  enableJukebox: false,
+  remoteControl: "none",
+  feishinUrl: "",
+  feishinUsername: "",
+  playbackPositionOffsetMs: DEFAULT_PLAYBACK_POSITION_OFFSET_MS
+};
+async function loadStoredConnection(userId) {
+  const raw = await spindle.userStorage.getJson("config.json", { fallback: DEFAULT_STORED_CONFIG, userId });
+  const remoteControl = raw?.remoteControl === "feishin" || raw?.remoteControl === "jukebox" ? raw.remoteControl : raw?.enableJukebox ? "jukebox" : "none";
+  const stored = {
+    serverUrl: typeof raw?.serverUrl === "string" ? raw.serverUrl : "",
+    username: typeof raw?.username === "string" ? raw.username : "",
+    enableJukebox: remoteControl === "jukebox",
+    remoteControl,
+    feishinUrl: typeof raw?.feishinUrl === "string" ? raw.feishinUrl : "",
+    feishinUsername: typeof raw?.feishinUsername === "string" ? raw.feishinUsername : "",
+    playbackPositionOffsetMs: normalizePlaybackPositionOffset(raw?.playbackPositionOffsetMs),
+    verified: raw?.verified !== false
+  };
   const password = await spindle.enclave.get("subsonic_password", userId);
   const feishinPassword = await spindle.enclave.get("feishin_password", userId);
-  if (!stored.serverUrl || !stored.username || !password)
+  return { stored, password: password || "", feishinPassword: feishinPassword || "" };
+}
+async function loadConfig(userId) {
+  const { stored, password, feishinPassword } = await loadStoredConnection(userId);
+  if (!stored.serverUrl || !stored.username || !password || stored.verified === false)
     return null;
-  const remoteControl = stored.remoteControl === "feishin" || stored.remoteControl === "jukebox" ? stored.remoteControl : stored.enableJukebox ? "jukebox" : "none";
-  return { ...stored, remoteControl, enableJukebox: remoteControl === "jukebox", feishinUrl: stored.feishinUrl || "", feishinUsername: stored.feishinUsername || "", playbackPositionOffsetMs: normalizePlaybackPositionOffset(stored.playbackPositionOffsetMs), password, feishinPassword: feishinPassword || "" };
+  return { ...stored, password, feishinPassword };
 }
 function normalizePlaybackPositionOffset(value) {
   const numeric = typeof value === "number" ? value : Number(value);
@@ -625,12 +667,15 @@ async function restoreAlbumPalette(state, config, userId) {
   return { artworkKey, colors };
 }
 async function loadUser(userId) {
+  if (connectingUsers.has(userId))
+    return isConnected(userId);
+  const generation = connectionGeneration(userId);
   const config = await loadConfig(userId);
+  if (connectingUsers.has(userId) || generation !== connectionGeneration(userId))
+    return isConnected(userId);
   setConfig(userId, config);
   setActiveUser(userId);
   activeUserId2 = userId;
-  if (config && await verifyConfiguredJukebox(config, userId))
-    await saveConfig(config, userId);
   return !!config;
 }
 function lyricsRequests(userId) {
@@ -672,11 +717,58 @@ function syncLyricsForTrackChange(userId, previousTrackUri, state) {
   pushLyricsMacros(null);
   getLyricsForState(state, userId);
 }
-async function saveConfig(config, userId) {
-  await spindle.userStorage.setJson("config.json", { serverUrl: config.serverUrl, username: config.username, enableJukebox: config.enableJukebox, remoteControl: config.remoteControl, feishinUrl: config.feishinUrl, feishinUsername: config.feishinUsername, playbackPositionOffsetMs: normalizePlaybackPositionOffset(config.playbackPositionOffsetMs) }, { userId });
+function storedConfig(config, verified) {
+  return { serverUrl: config.serverUrl, username: config.username, enableJukebox: config.enableJukebox, remoteControl: config.remoteControl, feishinUrl: config.feishinUrl, feishinUsername: config.feishinUsername, playbackPositionOffsetMs: normalizePlaybackPositionOffset(config.playbackPositionOffsetMs), verified };
+}
+async function saveStoredConfig(config, userId, verified) {
+  await spindle.userStorage.setJson("config.json", storedConfig(config, verified), { userId });
+}
+async function saveConnectionDraft(config, userId) {
+  await saveStoredConfig(config, userId, false);
   await spindle.enclave.put("subsonic_password", config.password, userId);
-  await spindle.enclave.put("feishin_password", config.feishinPassword, userId);
+  if (config.feishinPassword)
+    await spindle.enclave.put("feishin_password", config.feishinPassword, userId);
+  else
+    await spindle.enclave.delete("feishin_password", userId);
   setConfig(userId, config);
+}
+async function invalidateAuthentication(userId, expectedGeneration) {
+  if (expectedGeneration !== connectionGeneration(userId))
+    return false;
+  advanceConnectionGeneration(userId);
+  stopPolling(userId);
+  stopFeishin(userId);
+  setConfig(userId, null);
+  const { stored } = await loadStoredConnection(userId);
+  if (stored.serverUrl || stored.username) {
+    await spindle.userStorage.setJson("config.json", { ...stored, verified: false }, { userId });
+  }
+  await sendConfig(userId);
+  return true;
+}
+function normalizeWidgetPrefs(value) {
+  if (!value || typeof value !== "object")
+    return null;
+  const prefs = value;
+  if (typeof prefs.size !== "number" || !Number.isFinite(prefs.size) || prefs.shape !== "circle" && prefs.shape !== "squircle" || prefs.sizeMode !== "small" && prefs.sizeMode !== "medium" && prefs.sizeMode !== "large" && prefs.sizeMode !== "custom" || prefs.miniPlayerStyle !== "default" && prefs.miniPlayerStyle !== "modern")
+    return null;
+  const normalized = { size: prefs.size, shape: prefs.shape, sizeMode: prefs.sizeMode, miniPlayerStyle: prefs.miniPlayerStyle };
+  if (typeof prefs.x === "number" && Number.isFinite(prefs.x))
+    normalized.x = prefs.x;
+  if (typeof prefs.y === "number" && Number.isFinite(prefs.y))
+    normalized.y = prefs.y;
+  return normalized;
+}
+async function saveWidgetPreferences(preferences, userId) {
+  const previous2 = widgetPreferenceWrites.get(userId) || Promise.resolve();
+  const write = previous2.catch(() => {}).then(() => spindle.userStorage.setJson(WIDGET_PREFS_STORAGE_KEY, preferences, { userId }));
+  widgetPreferenceWrites.set(userId, write);
+  try {
+    await write;
+  } finally {
+    if (widgetPreferenceWrites.get(userId) === write)
+      widgetPreferenceWrites.delete(userId);
+  }
 }
 async function verifyConfiguredJukebox(config, userId) {
   if (!config.enableJukebox) {
@@ -757,6 +849,7 @@ function startPolling(userId) {
     return;
   pollingUsers.add(userId);
   const poll = async () => {
+    const generation = connectionGeneration(userId);
     try {
       const state = await pushState(userId);
       if (!pollingUsers.has(userId))
@@ -765,6 +858,17 @@ function startPolling(userId) {
       pollingTimers.set(userId, setTimeout(poll, delay));
     } catch (error) {
       spindle.log.warn(`Subsonic polling failed: ${error?.message || error}`);
+      if (isAuthenticationError(error)) {
+        if (generation !== connectionGeneration(userId))
+          return;
+        try {
+          await invalidateAuthentication(userId, generation);
+        } catch (storageError) {
+          spindle.log.warn(`Could not invalidate Subsonic authentication: ${storageError?.message || storageError}`);
+        }
+        send({ type: "error", message: error?.message || "Subsonic authentication failed", operation: "get_state", authenticationFailure: true }, userId);
+        return;
+      }
       if (!pollingUsers.has(userId))
         return;
       pollingTimers.set(userId, setTimeout(poll, POLL_IDLE_MS));
@@ -773,8 +877,9 @@ function startPolling(userId) {
   poll();
 }
 async function sendConfig(userId) {
-  const config = await loadConfig(userId);
-  send({ type: "config", serverUrl: config?.serverUrl || "", username: config?.username || "", hasPassword: !!config?.password, remoteControl: config?.remoteControl || "none", feishinUrl: config?.feishinUrl || "", feishinUsername: config?.feishinUsername || "", hasFeishinPassword: !!config?.feishinPassword, playbackPositionOffsetMs: config?.playbackPositionOffsetMs ?? DEFAULT_PLAYBACK_POSITION_OFFSET_MS, jukeboxUnavailableReason: jukeboxUnavailableReasons.get(userId) || null, connected: !!config }, userId);
+  const { stored, password, feishinPassword } = await loadStoredConnection(userId);
+  const connected = !!stored.serverUrl && !!stored.username && !!password && stored.verified !== false;
+  send({ type: "config", serverUrl: stored.serverUrl, username: stored.username, hasPassword: !!password, remoteControl: stored.remoteControl, feishinUrl: stored.feishinUrl, feishinUsername: stored.feishinUsername, hasFeishinPassword: !!feishinPassword, playbackPositionOffsetMs: stored.playbackPositionOffsetMs, jukeboxUnavailableReason: jukeboxUnavailableReasons.get(userId) || null, connected }, userId);
 }
 async function updateTheme(colors, userId, artworkKey) {
   try {
@@ -803,7 +908,21 @@ async function updateTheme(colors, userId, artworkKey) {
 }
 spindle.onFrontendMessage(async (raw, userId) => {
   const message = raw;
+  let operationGeneration = connectionGeneration(userId);
   try {
+    if (message.type === "set_widget_preferences") {
+      const preferences = normalizeWidgetPrefs(message.preferences);
+      if (!preferences)
+        throw new Error("Invalid widget preferences");
+      await saveWidgetPreferences(preferences, userId);
+      return;
+    }
+    if (message.type === "get_widget_preferences") {
+      await widgetPreferenceWrites.get(userId)?.catch(() => {});
+      const preferences = normalizeWidgetPrefs(await spindle.userStorage.getJson(WIDGET_PREFS_STORAGE_KEY, { fallback: null, userId }));
+      send({ type: "widget_preferences", preferences }, userId);
+      return;
+    }
     await loadUser(userId);
     switch (message.type) {
       case "get_config":
@@ -825,20 +944,36 @@ spindle.onFrontendMessage(async (raw, userId) => {
           startPolling(userId);
         break;
       case "connect": {
-        const config = { serverUrl: message.serverUrl, username: message.username, password: message.password, remoteControl: message.remoteControl, enableJukebox: message.remoteControl === "jukebox", feishinUrl: message.feishinUrl, feishinUsername: message.feishinUsername, feishinPassword: message.feishinPassword, playbackPositionOffsetMs: normalizePlaybackPositionOffset(message.playbackPositionOffsetMs) };
-        setConfig(userId, config);
-        await ping(userId);
-        stateByUser.delete(userId);
-        stateObservedAt.delete(userId);
-        jukeboxAvailabilityChecked.delete(userId);
-        if (config.enableJukebox)
-          await verifyConfiguredJukebox(config, userId);
-        await saveConfig(config, userId);
-        startFeishin(config, userId);
-        send({ type: "connected" }, userId);
-        await sendConfig(userId);
-        if (config.remoteControl !== "feishin")
-          startPolling(userId);
+        operationGeneration = advanceConnectionGeneration(userId);
+        connectingUsers.set(userId, operationGeneration);
+        stopPolling(userId);
+        stopFeishin(userId);
+        try {
+          const existing = await loadStoredConnection(userId);
+          const password = message.password || existing.password;
+          const feishinPassword = message.feishinPassword || existing.feishinPassword;
+          const remoteControl = message.remoteControl === "jukebox" || message.remoteControl === "feishin" ? message.remoteControl : "none";
+          const config = { serverUrl: message.serverUrl.trim(), username: message.username.trim(), password, remoteControl, enableJukebox: remoteControl === "jukebox", feishinUrl: message.feishinUrl.trim(), feishinUsername: message.feishinUsername.trim(), feishinPassword, playbackPositionOffsetMs: normalizePlaybackPositionOffset(message.playbackPositionOffsetMs) };
+          if (!config.serverUrl || !config.username || !config.password)
+            throw new Error("Subsonic server URL, username, and password are required");
+          await saveConnectionDraft(config, userId);
+          await ping(userId);
+          stateByUser.delete(userId);
+          stateObservedAt.delete(userId);
+          jukeboxAvailabilityChecked.delete(userId);
+          if (config.enableJukebox)
+            await verifyConfiguredJukebox(config, userId);
+          await saveStoredConfig(config, userId, true);
+          setConfig(userId, config);
+          startFeishin(config, userId);
+          send({ type: "connected" }, userId);
+          await sendConfig(userId);
+          if (config.remoteControl !== "feishin")
+            startPolling(userId);
+        } finally {
+          if (connectingUsers.get(userId) === operationGeneration)
+            connectingUsers.delete(userId);
+        }
         break;
       }
       case "set_playback_position_offset": {
@@ -846,12 +981,14 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (!config)
           break;
         config.playbackPositionOffsetMs = normalizePlaybackPositionOffset(message.playbackPositionOffsetMs);
-        await saveConfig(config, userId);
+        await saveStoredConfig(config, userId, true);
+        setConfig(userId, config);
         await sendConfig(userId);
         await pushState(userId);
         break;
       }
       case "disconnect":
+        advanceConnectionGeneration(userId);
         stopPolling(userId);
         stopFeishin(userId);
         setConfig(userId, null);
@@ -867,6 +1004,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         await spindle.enclave.delete("feishin_password", userId);
         await updateTheme(null, userId);
         send({ type: "disconnected" }, userId);
+        await sendConfig(userId);
         send({ type: "state", playbackState: null, connected: false }, userId);
         break;
       case "feishin_state":
@@ -934,7 +1072,26 @@ spindle.onFrontendMessage(async (raw, userId) => {
         break;
     }
   } catch (error) {
-    send({ type: "error", message: error?.message || "Subsonic request failed" }, userId);
+    const authenticationFailure = isAuthenticationError(error);
+    if (authenticationFailure) {
+      if (operationGeneration !== connectionGeneration(userId))
+        return;
+      try {
+        await invalidateAuthentication(userId, operationGeneration);
+      } catch (storageError) {
+        spindle.log.warn(`Could not invalidate Subsonic authentication: ${storageError?.message || storageError}`);
+      }
+    } else if (message.type === "connect") {
+      if (operationGeneration !== connectionGeneration(userId))
+        return;
+      stopPolling(userId);
+      stopFeishin(userId);
+      setConfig(userId, null);
+      await sendConfig(userId).catch((storageError) => {
+        spindle.log.warn(`Could not refresh failed connection settings: ${storageError?.message || storageError}`);
+      });
+    }
+    send({ type: "error", message: error?.message || "Subsonic request failed", operation: message.type, authenticationFailure }, userId);
   }
 });
 spindle.log.info("Subsonic Controls loaded");

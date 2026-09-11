@@ -4,6 +4,7 @@ export interface SettingsUI {
   root: HTMLElement;
   update(connected: boolean, serverUrl: string, username: string, hasPassword: boolean, remoteControl: RemoteControl, feishinUrl: string, feishinUsername: string, hasFeishinPassword: boolean, playbackPositionOffsetMs: number, jukeboxUnavailableReason: string | null): void;
   setConnecting(): void;
+  setError(message: string): void;
   destroy(): void;
 }
 
@@ -48,31 +49,63 @@ export function createSettingsUI(sendToBackend: (message: unknown) => void): Set
   const actions = document.createElement("div"); actions.className = "spotify-settings-row";
   const button = document.createElement("button"); button.className = "spotify-btn spotify-btn-primary"; actions.append(button); body.append(actions); root.append(header, body);
   let isConnected = false;
+  let isConnecting = false;
+  let hasUserEdits = false;
+  let savedPasswordAvailable = false;
+  let savedFeishinPasswordAvailable = false;
+  const editableFields = [serverUrl, username, password, playbackPositionOffset, controller, feishinUrl, feishinUsername, feishinPassword];
+  for (const input of editableFields) input.addEventListener("input", () => { hasUserEdits = true; });
+
+  function setStatus(label: string, connected: boolean, error = false) {
+    status.replaceChildren();
+    const dot = document.createElement("span");
+    dot.className = `spotify-status-dot ${connected ? "connected" : "disconnected"}`;
+    const text = document.createElement("span"); text.textContent = label;
+    if (error) text.style.color = "#e74c3c";
+    status.append(dot, text);
+  }
   function syncControllerFields() {
     const isFeishin = controller.value === "feishin";
     feishinFields.style.display = isFeishin ? "" : "none";
     jukeboxNote.style.display = controller.value === "jukebox" ? "" : "none";
     jukeboxUnavailable.style.display = controller.value === "jukebox" && jukeboxUnavailable.textContent ? "" : "none";
   }
-  controller.onchange = syncControllerFields;
+  controller.onchange = () => { hasUserEdits = true; syncControllerFields(); };
   function update(connected: boolean, url: string, user: string, hasPassword: boolean, remoteControl: RemoteControl, remoteUrl: string, remoteUser: string, hasRemotePassword: boolean, positionOffsetMs: number, unavailable: string | null) {
-    isConnected = connected; if (url) serverUrl.value = url; if (user) username.value = user; if (remoteUrl) feishinUrl.value = remoteUrl; if (remoteUser) feishinUsername.value = remoteUser;
-    playbackPositionOffset.value = String(positionOffsetMs);
-    controller.value = remoteControl; jukeboxUnavailable.textContent = unavailable || ""; syncControllerFields();
+    isConnected = connected;
+    savedPasswordAvailable = hasPassword;
+    savedFeishinPasswordAvailable = hasRemotePassword;
+    // Startup/config refresh messages can arrive while the user is typing or
+    // while a connection attempt is in flight. Do not erase that draft.
+    if (connected || (!isConnecting && !hasUserEdits)) {
+      serverUrl.value = url;
+      username.value = user;
+      feishinUrl.value = remoteUrl;
+      feishinUsername.value = remoteUser;
+      playbackPositionOffset.value = String(positionOffsetMs);
+      controller.value = remoteControl;
+    }
+    jukeboxUnavailable.textContent = unavailable || ""; syncControllerFields();
+    if (isConnecting && !connected) return;
     for (const input of [serverUrl, username, password, controller, feishinUrl, feishinUsername, feishinPassword]) input.disabled = connected;
-    password.value = ""; feishinPassword.value = "";
+    if (connected) {
+      isConnecting = false;
+      hasUserEdits = false;
+      password.value = "";
+      feishinPassword.value = "";
+    }
     password.placeholder = hasPassword ? "Saved securely (re-enter to change)" : "Subsonic password";
     feishinPassword.placeholder = hasRemotePassword ? "Saved securely (re-enter to change)" : "Optional Remote password";
     button.textContent = connected ? "Disconnect" : "Connect"; button.className = connected ? "spotify-btn spotify-btn-danger" : "spotify-btn spotify-btn-primary"; button.disabled = false;
-    status.innerHTML = connected ? '<span class="spotify-status-dot connected"></span>Connected' : '<span class="spotify-status-dot disconnected"></span>Not connected';
+    setStatus(connected ? "Connected" : "Not connected", connected);
   }
   button.onclick = () => {
     if (isConnected) return void sendToBackend({ type: "disconnect" });
     const remoteControl = controller.value as RemoteControl;
-    if (!serverUrl.value.trim() || !username.value.trim() || !password.value || (remoteControl === "feishin" && !feishinUrl.value.trim())) {
-      status.innerHTML = '<span class="spotify-status-dot disconnected"></span><span style="color:#e74c3c">Enter the Subsonic server credentials and, when selected, a Feishin Remote URL.</span>'; return;
+    if (!serverUrl.value.trim() || !username.value.trim() || (!password.value && !savedPasswordAvailable) || (remoteControl === "feishin" && !feishinUrl.value.trim())) {
+      setStatus("Enter the Subsonic server credentials and, when selected, a Feishin Remote URL.", false, true); return;
     }
-    button.disabled = true; button.textContent = "Connecting…";
+    isConnecting = true; button.disabled = true; button.textContent = "Connecting…";
     sendToBackend({ type: "connect", serverUrl: serverUrl.value.trim(), username: username.value.trim(), password: password.value, remoteControl, feishinUrl: feishinUrl.value.trim(), feishinUsername: feishinUsername.value.trim(), feishinPassword: feishinPassword.value, playbackPositionOffsetMs: Number(playbackPositionOffset.value) });
   };
   playbackPositionOffset.onchange = () => {
@@ -82,5 +115,21 @@ export function createSettingsUI(sendToBackend: (message: unknown) => void): Set
     if (isConnected) sendToBackend({ type: "set_playback_position_offset", playbackPositionOffsetMs: Number(playbackPositionOffset.value) });
   };
   update(false, "", "", false, "none", "", "", false, 1000, null);
-  return { root, update, setConnecting() { button.disabled = true; button.textContent = "Connecting…"; }, destroy() { root.remove(); } };
+  return {
+    root,
+    update,
+    setConnecting() { isConnecting = true; button.disabled = true; button.textContent = "Connecting…"; },
+    setError(message: string) {
+      isConnected = false;
+      isConnecting = false;
+      button.disabled = false;
+      button.textContent = "Connect";
+      button.className = "spotify-btn spotify-btn-primary";
+      for (const input of [serverUrl, username, password, controller, feishinUrl, feishinUsername, feishinPassword]) input.disabled = false;
+      password.placeholder = savedPasswordAvailable ? "Saved securely (re-enter to change)" : "Subsonic password";
+      feishinPassword.placeholder = savedFeishinPasswordAvailable ? "Saved securely (re-enter to change)" : "Optional Remote password";
+      setStatus(message, false, true);
+    },
+    destroy() { root.remove(); },
+  };
 }

@@ -68,7 +68,19 @@ function responseError(payload: SubsonicPayload): Error | null {
   const response = payload["subsonic-response"];
   if (!response || response.status === "ok") return null;
   const error = response.error || {};
-  return new Error(error.message || `Subsonic request failed${error.code ? ` (code ${error.code})` : ""}`);
+  return taggedError(
+    error.message || `Subsonic request failed${error.code ? ` (code ${error.code})` : ""}`,
+    Number(error.code) >= 40 && Number(error.code) <= 44,
+  );
+}
+
+function taggedError(message: string, authenticationFailure = false): Error {
+  return Object.assign(new Error(message), { authenticationFailure });
+}
+
+export function isAuthenticationError(error: unknown): boolean {
+  return error instanceof Error
+    && (error as Error & { authenticationFailure?: boolean }).authenticationFailure === true;
 }
 
 async function request(method: string, values: Record<string, string | number | undefined> = {}, userId?: string): Promise<SubsonicPayload> {
@@ -88,7 +100,7 @@ async function request(method: string, values: Record<string, string | number | 
     if (method === "jukeboxControl" && isJukeboxUnavailableStatus(result.status)) {
       throw new Error(`This server does not implement the optional Subsonic Jukebox endpoint (HTTP ${result.status}).`);
     }
-    throw new Error(`Subsonic ${method} failed (${result.status})`);
+    throw taggedError(`Subsonic ${method} failed (${result.status})`, result.status === 401 || result.status === 403);
   }
   let payload: SubsonicPayload;
   try { payload = JSON.parse(result.body); } catch { throw new Error(`Subsonic ${method} returned invalid JSON`); }

@@ -1,5 +1,5 @@
 import type { SpindleFrontendContext, SpindleFloatWidgetHandle } from "lumiverse-spindle-types";
-import type { AlbumColors, BackendToFrontend, FrontendToBackend, MiniPlayerStyle, PlaybackState, RemoteControl } from "./types";
+import type { AlbumColors, BackendToFrontend, FrontendToBackend, MiniPlayerStyle, PlaybackState, RemoteControl, WidgetPrefs } from "./types";
 import { SPOTIFY_WIDGET_CSS } from "./ui/spotify-widget-styles";
 import { createSettingsUI } from "./ui/settings";
 import { createNowPlayingUI } from "./ui/now-playing";
@@ -249,6 +249,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let currentSizeMode: SizeMode = "medium";
   let currentMiniPlayerStyle: MiniPlayerStyle = "default";
   let savedWidgetPosition: { x: number; y: number } | undefined;
+  let localWidgetPreferences: WidgetPrefs | null = null;
   try {
     const stored = JSON.parse(localStorage.getItem(WIDGET_PREFS_KEY) || "null") as {
       size?: unknown; shape?: unknown; sizeMode?: unknown; miniPlayerStyle?: unknown; x?: unknown; y?: unknown;
@@ -261,15 +262,30 @@ export function setup(ctx: SpindleFrontendContext) {
     if (typeof stored?.x === "number" && typeof stored.y === "number") {
       savedWidgetPosition = { x: stored.x, y: stored.y };
     }
+    if (stored) {
+      localWidgetPreferences = {
+        size: currentWidgetSize,
+        shape: currentArtShape,
+        sizeMode: currentSizeMode,
+        miniPlayerStyle: currentMiniPlayerStyle,
+        ...savedWidgetPosition,
+      };
+    }
   } catch {}
 
   let widget: SpindleFloatWidgetHandle;
   let lastKnownPosition: { x: number; y: number } | null = null;
+  let widgetPreferencesChanged = false;
   function saveWidgetPrefs() {
-    const position = lastKnownPosition ?? widget.getPosition();
-    localStorage.setItem(WIDGET_PREFS_KEY, JSON.stringify({
+    const position = widget.getPosition();
+    const preferences: WidgetPrefs = {
       size: currentWidgetSize, shape: currentArtShape, sizeMode: currentSizeMode, miniPlayerStyle: currentMiniPlayerStyle, x: position.x, y: position.y,
-    }));
+    };
+    // Keep the browser copy as an offline/older-host fallback, while the
+    // authoritative copy follows the signed-in user through userStorage.
+    widgetPreferencesChanged = true;
+    localStorage.setItem(WIDGET_PREFS_KEY, JSON.stringify(preferences));
+    send({ type: "set_widget_preferences", preferences });
   }
 
   let widgetSizeLabelTitle: HTMLSpanElement | null = null;
@@ -492,6 +508,29 @@ export function setup(ctx: SpindleFrontendContext) {
     createWidget(position);
     clampWidgetPosition();
     saveWidgetPrefs();
+  }
+
+  function applyWidgetPreferences(preferences: WidgetPrefs) {
+    const style = preferences.miniPlayerStyle === "modern" ? "modern" : "default";
+    const sizeMode = isSizeMode(preferences.sizeMode) ? preferences.sizeMode : inferSizeMode(preferences.size, style);
+    currentMiniPlayerStyle = style;
+    currentArtShape = preferences.shape === "squircle" ? "squircle" : "circle";
+    currentSizeMode = sizeMode;
+    currentWidgetSize = sizeMode === "custom"
+      ? clampWidgetSize(preferences.size, style)
+      : getSizePresets(style)[sizeMode];
+    miniPlayer.setStyle(style);
+    miniPlayer.hide();
+    modernWidgetExpanded = false;
+    modernWidget.setExpanded(false);
+    const position = typeof preferences.x === "number" && typeof preferences.y === "number"
+      ? { x: preferences.x, y: preferences.y }
+      : widget.getPosition();
+    lastKnownPosition = position;
+    widget.destroy();
+    updateWidgetCustomizationUI();
+    createWidget(position);
+    clampWidgetPosition();
   }
 
   let openContextMenuCount = 0;
@@ -724,6 +763,11 @@ export function setup(ctx: SpindleFrontendContext) {
         controls.update(currentState, connected, message.remoteControl !== "none", message.remoteControl === "feishin" ? "Feishin Controls" : "Jukebox Controls");
         syncWidget();
         break;
+      case "widget_preferences":
+        if (message.preferences && !widgetPreferencesChanged) applyWidgetPreferences(message.preferences);
+        else if (!message.preferences && !widgetPreferencesChanged && localWidgetPreferences) send({ type: "set_widget_preferences", preferences: localWidgetPreferences });
+        else if (!message.preferences && !widgetPreferencesChanged) saveWidgetPrefs();
+        break;
       case "state":
         connected = message.connected;
         currentState = message.playbackState;
@@ -784,7 +828,6 @@ export function setup(ctx: SpindleFrontendContext) {
         break;
       case "disconnected":
         connected = false; currentState = null; lyricsTrackId = null; jukeboxEnabled = false;
-        settings.update(false, configuredServerUrl, configuredUsername, configuredHasPassword, remoteControl, configuredFeishinUrl, configuredFeishinUsername, configuredHasFeishinPassword, configuredPlaybackPositionOffsetMs, null);
         search.setAvailable(true);
         search.setPlaybackAvailable(remoteControl === "jukebox");
         lastThemeArtUrl = null;
@@ -806,7 +849,10 @@ export function setup(ctx: SpindleFrontendContext) {
           modernWidget.updateLyrics(message.trackUri, message.plainLyrics, message.syncedLyrics, message.instrumental);
         }
         break;
-      case "error": console.warn("[Subsonic Controls]", message.message); break;
+      case "error":
+        if (message.operation === "connect" || message.authenticationFailure) settings.setError(message.message);
+        console.warn("[Subsonic Controls]", message.message);
+        break;
     }
   });
   cleanups.push(messages);
@@ -861,5 +907,6 @@ export function setup(ctx: SpindleFrontendContext) {
   });
   send({ type: "get_config" });
   send({ type: "get_state" });
+  send({ type: "get_widget_preferences" });
   return () => { for (const cleanup of cleanups) cleanup(); };
 }

@@ -2325,46 +2325,75 @@ function createSettingsUI(sendToBackend) {
   body.append(actions);
   root.append(header, body);
   let isConnected = false;
+  let isConnecting = false;
+  let hasUserEdits = false;
+  let savedPasswordAvailable = false;
+  let savedFeishinPasswordAvailable = false;
+  const editableFields = [serverUrl, username, password, playbackPositionOffset, controller, feishinUrl, feishinUsername, feishinPassword];
+  for (const input of editableFields)
+    input.addEventListener("input", () => {
+      hasUserEdits = true;
+    });
+  function setStatus(label, connected, error = false) {
+    status.replaceChildren();
+    const dot = document.createElement("span");
+    dot.className = `spotify-status-dot ${connected ? "connected" : "disconnected"}`;
+    const text = document.createElement("span");
+    text.textContent = label;
+    if (error)
+      text.style.color = "#e74c3c";
+    status.append(dot, text);
+  }
   function syncControllerFields() {
     const isFeishin = controller.value === "feishin";
     feishinFields.style.display = isFeishin ? "" : "none";
     jukeboxNote.style.display = controller.value === "jukebox" ? "" : "none";
     jukeboxUnavailable.style.display = controller.value === "jukebox" && jukeboxUnavailable.textContent ? "" : "none";
   }
-  controller.onchange = syncControllerFields;
+  controller.onchange = () => {
+    hasUserEdits = true;
+    syncControllerFields();
+  };
   function update(connected, url, user, hasPassword, remoteControl, remoteUrl, remoteUser, hasRemotePassword, positionOffsetMs, unavailable) {
     isConnected = connected;
-    if (url)
+    savedPasswordAvailable = hasPassword;
+    savedFeishinPasswordAvailable = hasRemotePassword;
+    if (connected || !isConnecting && !hasUserEdits) {
       serverUrl.value = url;
-    if (user)
       username.value = user;
-    if (remoteUrl)
       feishinUrl.value = remoteUrl;
-    if (remoteUser)
       feishinUsername.value = remoteUser;
-    playbackPositionOffset.value = String(positionOffsetMs);
-    controller.value = remoteControl;
+      playbackPositionOffset.value = String(positionOffsetMs);
+      controller.value = remoteControl;
+    }
     jukeboxUnavailable.textContent = unavailable || "";
     syncControllerFields();
+    if (isConnecting && !connected)
+      return;
     for (const input of [serverUrl, username, password, controller, feishinUrl, feishinUsername, feishinPassword])
       input.disabled = connected;
-    password.value = "";
-    feishinPassword.value = "";
+    if (connected) {
+      isConnecting = false;
+      hasUserEdits = false;
+      password.value = "";
+      feishinPassword.value = "";
+    }
     password.placeholder = hasPassword ? "Saved securely (re-enter to change)" : "Subsonic password";
     feishinPassword.placeholder = hasRemotePassword ? "Saved securely (re-enter to change)" : "Optional Remote password";
     button.textContent = connected ? "Disconnect" : "Connect";
     button.className = connected ? "spotify-btn spotify-btn-danger" : "spotify-btn spotify-btn-primary";
     button.disabled = false;
-    status.innerHTML = connected ? '<span class="spotify-status-dot connected"></span>Connected' : '<span class="spotify-status-dot disconnected"></span>Not connected';
+    setStatus(connected ? "Connected" : "Not connected", connected);
   }
   button.onclick = () => {
     if (isConnected)
       return void sendToBackend({ type: "disconnect" });
     const remoteControl = controller.value;
-    if (!serverUrl.value.trim() || !username.value.trim() || !password.value || remoteControl === "feishin" && !feishinUrl.value.trim()) {
-      status.innerHTML = '<span class="spotify-status-dot disconnected"></span><span style="color:#e74c3c">Enter the Subsonic server credentials and, when selected, a Feishin Remote URL.</span>';
+    if (!serverUrl.value.trim() || !username.value.trim() || !password.value && !savedPasswordAvailable || remoteControl === "feishin" && !feishinUrl.value.trim()) {
+      setStatus("Enter the Subsonic server credentials and, when selected, a Feishin Remote URL.", false, true);
       return;
     }
+    isConnecting = true;
     button.disabled = true;
     button.textContent = "Connecting…";
     sendToBackend({ type: "connect", serverUrl: serverUrl.value.trim(), username: username.value.trim(), password: password.value, remoteControl, feishinUrl: feishinUrl.value.trim(), feishinUsername: feishinUsername.value.trim(), feishinPassword: feishinPassword.value, playbackPositionOffsetMs: Number(playbackPositionOffset.value) });
@@ -2378,12 +2407,30 @@ function createSettingsUI(sendToBackend) {
       sendToBackend({ type: "set_playback_position_offset", playbackPositionOffsetMs: Number(playbackPositionOffset.value) });
   };
   update(false, "", "", false, "none", "", "", false, 1000, null);
-  return { root, update, setConnecting() {
-    button.disabled = true;
-    button.textContent = "Connecting…";
-  }, destroy() {
-    root.remove();
-  } };
+  return {
+    root,
+    update,
+    setConnecting() {
+      isConnecting = true;
+      button.disabled = true;
+      button.textContent = "Connecting…";
+    },
+    setError(message) {
+      isConnected = false;
+      isConnecting = false;
+      button.disabled = false;
+      button.textContent = "Connect";
+      button.className = "spotify-btn spotify-btn-primary";
+      for (const input of [serverUrl, username, password, controller, feishinUrl, feishinUsername, feishinPassword])
+        input.disabled = false;
+      password.placeholder = savedPasswordAvailable ? "Saved securely (re-enter to change)" : "Subsonic password";
+      feishinPassword.placeholder = savedFeishinPasswordAvailable ? "Saved securely (re-enter to change)" : "Optional Remote password";
+      setStatus(message, false, true);
+    },
+    destroy() {
+      root.remove();
+    }
+  };
 }
 
 // src/ui/crossfade-art.ts
@@ -5151,6 +5198,7 @@ function setup(ctx) {
   let currentSizeMode = "medium";
   let currentMiniPlayerStyle = "default";
   let savedWidgetPosition;
+  let localWidgetPreferences = null;
   try {
     const stored = JSON.parse(localStorage.getItem(WIDGET_PREFS_KEY) || "null");
     if (stored?.miniPlayerStyle === "modern")
@@ -5165,19 +5213,32 @@ function setup(ctx) {
     if (typeof stored?.x === "number" && typeof stored.y === "number") {
       savedWidgetPosition = { x: stored.x, y: stored.y };
     }
+    if (stored) {
+      localWidgetPreferences = {
+        size: currentWidgetSize,
+        shape: currentArtShape,
+        sizeMode: currentSizeMode,
+        miniPlayerStyle: currentMiniPlayerStyle,
+        ...savedWidgetPosition
+      };
+    }
   } catch {}
   let widget;
   let lastKnownPosition = null;
+  let widgetPreferencesChanged = false;
   function saveWidgetPrefs() {
-    const position = lastKnownPosition ?? widget.getPosition();
-    localStorage.setItem(WIDGET_PREFS_KEY, JSON.stringify({
+    const position = widget.getPosition();
+    const preferences = {
       size: currentWidgetSize,
       shape: currentArtShape,
       sizeMode: currentSizeMode,
       miniPlayerStyle: currentMiniPlayerStyle,
       x: position.x,
       y: position.y
-    }));
+    };
+    widgetPreferencesChanged = true;
+    localStorage.setItem(WIDGET_PREFS_KEY, JSON.stringify(preferences));
+    send({ type: "set_widget_preferences", preferences });
   }
   let widgetSizeLabelTitle = null;
   let widgetSizeHint = null;
@@ -5383,6 +5444,24 @@ function setup(ctx) {
     createWidget(position);
     clampWidgetPosition();
     saveWidgetPrefs();
+  }
+  function applyWidgetPreferences(preferences) {
+    const style = preferences.miniPlayerStyle === "modern" ? "modern" : "default";
+    const sizeMode = isSizeMode(preferences.sizeMode) ? preferences.sizeMode : inferSizeMode(preferences.size, style);
+    currentMiniPlayerStyle = style;
+    currentArtShape = preferences.shape === "squircle" ? "squircle" : "circle";
+    currentSizeMode = sizeMode;
+    currentWidgetSize = sizeMode === "custom" ? clampWidgetSize(preferences.size, style) : getSizePresets(style)[sizeMode];
+    miniPlayer.setStyle(style);
+    miniPlayer.hide();
+    modernWidgetExpanded = false;
+    modernWidget.setExpanded(false);
+    const position = typeof preferences.x === "number" && typeof preferences.y === "number" ? { x: preferences.x, y: preferences.y } : widget.getPosition();
+    lastKnownPosition = position;
+    widget.destroy();
+    updateWidgetCustomizationUI();
+    createWidget(position);
+    clampWidgetPosition();
   }
   let openContextMenuCount = 0;
   async function showWidgetMenu(x, y) {
@@ -5615,6 +5694,14 @@ function setup(ctx) {
         controls.update(currentState, connected, message.remoteControl !== "none", message.remoteControl === "feishin" ? "Feishin Controls" : "Jukebox Controls");
         syncWidget();
         break;
+      case "widget_preferences":
+        if (message.preferences && !widgetPreferencesChanged)
+          applyWidgetPreferences(message.preferences);
+        else if (!message.preferences && !widgetPreferencesChanged && localWidgetPreferences)
+          send({ type: "set_widget_preferences", preferences: localWidgetPreferences });
+        else if (!message.preferences && !widgetPreferencesChanged)
+          saveWidgetPrefs();
+        break;
       case "state":
         connected = message.connected;
         currentState = message.playbackState;
@@ -5677,7 +5764,6 @@ function setup(ctx) {
         currentState = null;
         lyricsTrackId = null;
         jukeboxEnabled = false;
-        settings.update(false, configuredServerUrl, configuredUsername, configuredHasPassword, remoteControl, configuredFeishinUrl, configuredFeishinUsername, configuredHasFeishinPassword, configuredPlaybackPositionOffsetMs, null);
         search.setAvailable(true);
         search.setPlaybackAvailable(remoteControl === "jukebox");
         lastThemeArtUrl = null;
@@ -5708,6 +5794,8 @@ function setup(ctx) {
         }
         break;
       case "error":
+        if (message.operation === "connect" || message.authenticationFailure)
+          settings.setError(message.message);
         console.warn("[Subsonic Controls]", message.message);
         break;
     }
@@ -5762,6 +5850,7 @@ function setup(ctx) {
   });
   send({ type: "get_config" });
   send({ type: "get_state" });
+  send({ type: "get_widget_preferences" });
   return () => {
     for (const cleanup of cleanups)
       cleanup();

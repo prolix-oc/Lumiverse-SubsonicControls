@@ -1,6 +1,8 @@
 export type FrontendToBackend =
   | { type: "get_state" }
   | { type: "get_config" }
+  | { type: "get_widget_preferences" }
+  | { type: "set_widget_preferences"; preferences: WidgetPrefs }
   | { type: "connect"; serverUrl: string; username: string; password: string; remoteControl: RemoteControl; feishinUrl: string; feishinUsername: string; feishinPassword: string; playbackPositionOffsetMs: number }
   | { type: "set_playback_position_offset"; playbackPositionOffsetMs: number }
   | { type: "disconnect" }
@@ -18,13 +20,14 @@ export type FrontendToBackend =
 export type BackendToFrontend =
   | { type: "state"; playbackState: PlaybackState | null; connected: boolean; albumPalette?: AlbumPalette | null }
   | { type: "config"; serverUrl: string; username: string; hasPassword: boolean; remoteControl: RemoteControl; feishinUrl: string; feishinUsername: string; hasFeishinPassword: boolean; playbackPositionOffsetMs: number; jukeboxUnavailableReason: string | null; connected: boolean }
+  | { type: "widget_preferences"; preferences: WidgetPrefs | null }
   | { type: "search_results"; results: SearchResult[] }
   | { type: "chat_songs"; chatId: string; entries: MessageSongEntry[] }
   | { type: "message_song"; chatId: string; messageId: string; swipeId: number; snapshot: SongSnapshot }
   | { type: "connected" }
   | { type: "disconnected" }
   | { type: "lyrics"; trackUri: string; plainLyrics: string | null; syncedLyrics: string | null; instrumental: boolean }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; operation?: FrontendToBackend["type"]; authenticationFailure?: boolean };
 
 export interface PlaybackState {
   isPlaying: boolean;
