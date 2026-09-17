@@ -196,8 +196,9 @@ export async function getPlaybackState(userId?: string): Promise<PlaybackState |
       const index = Number(status?.currentIndex);
       const current = status?.playing && Number.isInteger(index) ? status.playlist?.entry?.[index] : null;
       if (current) return mapState(current, true, "jukebox", Math.max(0, Number(status.position || 0) * 1000), userId);
-    } catch (error: any) {
-      spindle.log.warn(`Jukebox status unavailable: ${error?.message || error}`);
+    } catch {
+      // This optional probe falls back to getNowPlaying. Let the caller report
+      // a failed state fetch rather than logging the same outage twice.
     }
   }
   const response = await request("getNowPlaying", {}, userId);

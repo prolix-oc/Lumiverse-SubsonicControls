@@ -165,15 +165,13 @@ async function getPlaybackState(userId) {
   const config = getConfig(userId);
   if (config.enableJukebox) {
     try {
-      const response2 = await request("jukeboxControl", { action: "get" }, userId);
-      const status = response2.jukeboxStatus;
+      const response = await request("jukeboxControl", { action: "get" }, userId);
+      const status = response.jukeboxStatus;
       const index = Number(status?.currentIndex);
       const current = status?.playing && Number.isInteger(index) ? status.playlist?.entry?.[index] : null;
       if (current)
         return mapState(current, true, "jukebox", Math.max(0, Number(status.position || 0) * 1000), userId);
-    } catch (error) {
-      spindle.log.warn(`Jukebox status unavailable: ${error?.message || error}`);
-    }
+    } catch {}
   }
   const response = await request("getNowPlaying", {}, userId);
   const entries = response.nowPlaying?.entry || [];
@@ -485,7 +483,7 @@ function createLyricsRequestCoordinator(load, maxEntries = 24) {
     if (existing)
       return existing;
     const requestGeneration = generation;
-    const request2 = load(track).then((data) => {
+    const request = load(track).then((data) => {
       if (requestGeneration === generation)
         remember(track.trackUri, data ?? null);
       return data ?? null;
@@ -494,11 +492,11 @@ function createLyricsRequestCoordinator(load, maxEntries = 24) {
         remember(track.trackUri, null);
       return null;
     }).finally(() => {
-      if (pending.get(track.trackUri) === request2)
+      if (pending.get(track.trackUri) === request)
         pending.delete(track.trackUri);
     });
-    pending.set(track.trackUri, request2);
-    return request2;
+    pending.set(track.trackUri, request);
+    return request;
   }
   return {
     get,
@@ -644,9 +642,9 @@ async function getAlbumPaletteCache(config, userId) {
         entries[artworkKey] = colors;
     }
   }
-  const next2 = { serverUrl: config.serverUrl, entries };
-  albumPaletteCaches.set(userId, next2);
-  return next2;
+  const next = { serverUrl: config.serverUrl, entries };
+  albumPaletteCaches.set(userId, next);
+  return next;
 }
 function paletteKey(config, artworkKey) {
   return `${config.serverUrl}\x00${artworkKey}`;
@@ -779,8 +777,8 @@ function normalizeWidgetPrefs(value) {
   return normalized;
 }
 async function saveWidgetPreferences(preferences, userId) {
-  const previous2 = widgetPreferenceWrites.get(userId) || Promise.resolve();
-  const write = previous2.catch(() => {}).then(() => spindle.userStorage.setJson(WIDGET_PREFS_STORAGE_KEY, preferences, { userId }));
+  const previous = widgetPreferenceWrites.get(userId) || Promise.resolve();
+  const write = previous.catch(() => {}).then(() => spindle.userStorage.setJson(WIDGET_PREFS_STORAGE_KEY, preferences, { userId }));
   widgetPreferenceWrites.set(userId, write);
   try {
     await write;
@@ -832,11 +830,11 @@ async function pushState(userId) {
     return null;
   }
   if (config?.remoteControl === "feishin") {
-    const state2 = stateByUser.get(userId) || null;
-    pushPlaybackMacros(state2);
-    const albumPalette2 = await restoreAlbumPalette(state2, config, userId);
-    send({ type: "state", playbackState: state2, connected: true, albumPalette: albumPalette2 }, userId);
-    return state2;
+    const state = stateByUser.get(userId) || null;
+    pushPlaybackMacros(state);
+    const albumPalette = await restoreAlbumPalette(state, config, userId);
+    send({ type: "state", playbackState: state, connected: true, albumPalette }, userId);
+    return state;
   }
   if (!isConnected(userId)) {
     pushPlaybackMacros(null);
@@ -867,16 +865,21 @@ function startPolling(userId) {
   if (pollingUsers.has(userId))
     return;
   pollingUsers.add(userId);
+  let failureReported = false;
   const poll = async () => {
     const generation = connectionGeneration(userId);
     try {
       const state = await pushState(userId);
       if (!pollingUsers.has(userId))
         return;
+      failureReported = false;
       const delay = state?.isPlaying ? POLL_PLAYING_MS : POLL_IDLE_MS;
       pollingTimers.set(userId, setTimeout(poll, delay));
     } catch (error) {
-      spindle.log.warn(`Subsonic polling failed: ${error?.message || error}`);
+      if (!failureReported || isAuthenticationError(error)) {
+        spindle.log.warn(`Subsonic polling failed: ${error?.message || error}`);
+        failureReported = true;
+      }
       if (isAuthenticationError(error)) {
         if (generation !== connectionGeneration(userId))
           return;

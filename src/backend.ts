@@ -407,15 +407,21 @@ function startPolling(userId: string): void {
   // receive track changes instead of showing only their initial snapshot.
   if (pollingUsers.has(userId)) return;
   pollingUsers.add(userId);
+  let failureReported = false;
   const poll = async () => {
     const generation = connectionGeneration(userId);
     try {
       const state = await pushState(userId);
       if (!pollingUsers.has(userId)) return;
+      failureReported = false;
       const delay = state?.isPlaying ? POLL_PLAYING_MS : POLL_IDLE_MS;
       pollingTimers.set(userId, setTimeout(poll, delay));
     } catch (error: any) {
-      spindle.log.warn(`Subsonic polling failed: ${error?.message || error}`);
+      // Report an outage once, but never hide a later authentication failure.
+      if (!failureReported || subsonic.isAuthenticationError(error)) {
+        spindle.log.warn(`Subsonic polling failed: ${error?.message || error}`);
+        failureReported = true;
+      }
       if (subsonic.isAuthenticationError(error)) {
         if (generation !== connectionGeneration(userId)) return;
         try {
