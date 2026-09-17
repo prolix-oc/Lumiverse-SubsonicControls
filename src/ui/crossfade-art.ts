@@ -15,6 +15,7 @@ export function getTrackScopedArtUrl(
 ): string | null {
   if (!url) return null;
   if (!trackUri) return url;
+  if (/^(data|blob):/i.test(url)) return url;
 
   try {
     const scopedUrl = new URL(url);

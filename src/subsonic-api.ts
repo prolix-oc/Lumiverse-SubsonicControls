@@ -127,8 +127,26 @@ async function artUrl(coverArt: string | undefined, userId?: string): Promise<st
   const s = salt();
   const params = new URLSearchParams({ u: config.username, t: md5(config.password + s), s, v: API_VERSION, c: CLIENT_NAME, id: coverArt });
   const url = `${restRoot(config.serverUrl)}/getCoverArt.view?${params.toString()}`;
-  coverArtUrls.set(cacheKey, url);
-  return url;
+  try {
+    // Browser clients may not be able to reach a private HTTP music server.
+    // Keep authenticated requests on the backend, just like the JSON API.
+    const result = await spindle.cors(url, { method: "GET", responseType: "arraybuffer" }) as ApiResponse & {
+      headers?: Record<string, string>;
+      encoding?: string;
+    };
+    const contentType = Object.entries(result.headers || {}).find(([name]) => name.toLowerCase() === "content-type")?.[1].split(";")[0].trim();
+    if (result.status < 200 || result.status >= 300 || result.encoding !== "base64" || !result.body || !contentType?.startsWith("image/")) return null;
+    const dataUrl = `data:${contentType};base64,${result.body}`;
+    if (configs.get(resolvedUserId) === config) {
+      // Unlike signed URLs, inline artwork has a meaningful memory cost.
+      if (coverArtUrls.size >= 48) coverArtUrls.delete(coverArtUrls.keys().next().value!);
+      coverArtUrls.set(cacheKey, dataUrl);
+    }
+    return dataUrl;
+  } catch {
+    // Missing artwork must not discard otherwise valid tracks or playback.
+    return null;
+  }
 }
 
 function durationMs(entry: any): number { return Math.max(0, Number(entry?.duration || 0) * 1000); }

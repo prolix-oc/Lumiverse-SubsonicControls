@@ -41,6 +41,7 @@ export function setup(ctx: SpindleFrontendContext) {
     timer: ReturnType<typeof setTimeout>;
   }>();
   function fetchPaletteImage(url: string): Promise<string | null> {
+    if (/^(data|blob):/i.test(url)) return Promise.resolve(url);
     return new Promise((resolve) => {
       const requestId = crypto.randomUUID();
       const timer = setTimeout(() => {

@@ -113,8 +113,21 @@ async function artUrl(coverArt, userId) {
   const s = salt();
   const params = new URLSearchParams({ u: config.username, t: md5(config.password + s), s, v: API_VERSION, c: CLIENT_NAME, id: coverArt });
   const url = `${restRoot(config.serverUrl)}/getCoverArt.view?${params.toString()}`;
-  coverArtUrls.set(cacheKey, url);
-  return url;
+  try {
+    const result = await spindle.cors(url, { method: "GET", responseType: "arraybuffer" });
+    const contentType = Object.entries(result.headers || {}).find(([name]) => name.toLowerCase() === "content-type")?.[1].split(";")[0].trim();
+    if (result.status < 200 || result.status >= 300 || result.encoding !== "base64" || !result.body || !contentType?.startsWith("image/"))
+      return null;
+    const dataUrl = `data:${contentType};base64,${result.body}`;
+    if (configs.get(resolvedUserId) === config) {
+      if (coverArtUrls.size >= 48)
+        coverArtUrls.delete(coverArtUrls.keys().next().value);
+      coverArtUrls.set(cacheKey, dataUrl);
+    }
+    return dataUrl;
+  } catch {
+    return null;
+  }
 }
 function durationMs(entry) {
   return Math.max(0, Number(entry?.duration || 0) * 1000);

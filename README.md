@@ -15,6 +15,8 @@ A Lumiverse extension for Subsonic and OpenSubsonic-compatible servers such as N
 
 The Subsonic protocol does not provide a universal remote-control API for playback happening in another client. Its portable now-playing endpoint reports active users, while playback controls are available through the optional server-side Jukebox endpoint. Choose **Now playing only**, **Server-side Jukebox**, or **Feishin Desktop Remote** independently from the configured Subsonic server.
 
+Album artwork is fetched through Lumiverse's backend image proxy and delivered to the UI as an inline image. The browser does not need direct access to the music server, so an HTTPS Lumiverse page can display artwork from a private HTTP Navidrome server. Lumiverse's backend must be able to reach the configured server. Missing artwork does not prevent track metadata from loading.
+
 ## Feishin desktop Remote
 
 Keep the Subsonic server configured, select **Feishin Desktop Remote** under **Playback controls**, then enter the URL shown by Feishin's **Settings → Window → Remote** section (normally `http://<computer-lan-ip>:4333`). Feishin must be running on the same reachable network; its browser build does not expose the Remote server.

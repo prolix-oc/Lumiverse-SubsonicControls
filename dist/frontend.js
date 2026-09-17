@@ -2439,6 +2439,8 @@ function getTrackScopedArtUrl(url, trackUri) {
     return null;
   if (!trackUri)
     return url;
+  if (/^(data|blob):/i.test(url))
+    return url;
   try {
     const scopedUrl = new URL(url);
     scopedUrl.searchParams.set("track", trackUri);
@@ -4997,6 +4999,8 @@ function setup(ctx) {
   const ALBUM_PALETTE_CACHE_LIMIT = 48;
   const pendingPaletteImages = new Map;
   function fetchPaletteImage(url) {
+    if (/^(data|blob):/i.test(url))
+      return Promise.resolve(url);
     return new Promise((resolve) => {
       const requestId = crypto.randomUUID();
       const timer = setTimeout(() => {
