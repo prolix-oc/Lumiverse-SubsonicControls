@@ -2762,7 +2762,7 @@ function createSearchUI(send) {
 // src/ui/lyric-auto-scroll.ts
 var USER_SCROLL_SUPPRESS_MS = 2500;
 var SCROLL_TIME_CONSTANT_MS = 85;
-var SCROLL_MAX_SPEED_PX_PER_S = 3000;
+var SCROLL_MAX_SPEED_PX_PER_S = 1800;
 var SCROLL_SETTLE_PX = 0.5;
 function createLyricAutoScroller(container) {
   let frame = null;
@@ -2771,6 +2771,12 @@ function createLyricAutoScroller(container) {
   let lastUserScrollAt = 0;
   let suspended = false;
   let previousFrameAt = 0;
+  function centringOffset(element) {
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = element.getBoundingClientRect();
+    const limit = Math.max(0, container.scrollHeight - container.clientHeight);
+    return Math.min(Math.max(container.scrollTop + (targetRect.top + targetRect.height / 2) - (containerRect.top + container.clientHeight / 2), 0), limit);
+  }
   function stop() {
     if (frame !== null)
       cancelAnimationFrame(frame);
@@ -2782,16 +2788,20 @@ function createLyricAutoScroller(container) {
     expected = null;
     lastUserScrollAt = Date.now();
   }
+  function cancel() {
+    stop();
+    expected = null;
+  }
   function step(now) {
     frame = null;
-    if (target === null || !container.isConnected) {
+    if (target === null || !target.isConnected || !container.isConnected) {
       stop();
       return;
     }
     const elapsed = Math.min(Math.max(now - previousFrameAt, 0), 100);
     previousFrameAt = now;
     const limit = Math.max(0, container.scrollHeight - container.clientHeight);
-    const goal = Math.min(Math.max(target, 0), limit);
+    const goal = centringOffset(target);
     const remaining = goal - container.scrollTop;
     if (Math.abs(remaining) < SCROLL_SETTLE_PX) {
       expected = goal;
@@ -2822,17 +2832,13 @@ function createLyricAutoScroller(container) {
         return;
       if (!options?.force && Date.now() - lastUserScrollAt <= USER_SCROLL_SUPPRESS_MS)
         return;
-      const containerRect = container.getBoundingClientRect();
-      const targetRect = targetEl.getBoundingClientRect();
-      const limit = Math.max(0, container.scrollHeight - container.clientHeight);
-      const goal = Math.min(Math.max(container.scrollTop + (targetRect.top + targetRect.height / 2) - (containerRect.top + container.clientHeight / 2), 0), limit);
       if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
         stop();
-        expected = goal;
-        container.scrollTop = goal;
+        expected = centringOffset(targetEl);
+        container.scrollTop = expected;
         return;
       }
-      target = goal;
+      target = targetEl;
       if (frame === null) {
         previousFrameAt = performance.now();
         frame = requestAnimationFrame(step);
@@ -2846,10 +2852,7 @@ function createLyricAutoScroller(container) {
         cancel();
       return true;
     },
-    cancel() {
-      stop();
-      expected = null;
-    },
+    cancel,
     destroy() {
       cancel();
       container.removeEventListener("wheel", noteUserScroll);

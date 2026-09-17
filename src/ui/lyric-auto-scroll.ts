@@ -38,12 +38,31 @@ export interface LyricAutoScroller {
  */
 export function createLyricAutoScroller(container: HTMLElement): LyricAutoScroller {
   let frame: number | null = null;
-  let target: number | null = null;
+  let target: HTMLElement | null = null;
   /** Offset our last write produced, used to tell our scrolls from the user's. */
   let expected: number | null = null;
   let lastUserScrollAt = 0;
   let suspended = false;
   let previousFrameAt = 0;
+
+  /**
+   * Offset that puts `element`'s midpoint at the container's. Re-measured every
+   * frame rather than cached: the rects a freshly restyled line reports during
+   * the current task sit a pixel or two off, and artwork or a font swap can
+   * shift the track mid-glide.
+   */
+  function centringOffset(element: HTMLElement): number {
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = element.getBoundingClientRect();
+    const limit = Math.max(0, container.scrollHeight - container.clientHeight);
+    return Math.min(
+      Math.max(
+        container.scrollTop + (targetRect.top + targetRect.height / 2) - (containerRect.top + container.clientHeight / 2),
+        0,
+      ),
+      limit,
+    );
+  }
 
   function stop() {
     if (frame !== null) cancelAnimationFrame(frame);
@@ -64,17 +83,15 @@ export function createLyricAutoScroller(container: HTMLElement): LyricAutoScroll
 
   function step(now: number) {
     frame = null;
-    if (target === null || !container.isConnected) {
+    if (target === null || !target.isConnected || !container.isConnected) {
       stop();
       return;
     }
     // A stalled tab must not teleport the track, so bound the elapsed time.
     const elapsed = Math.min(Math.max(now - previousFrameAt, 0), 100);
     previousFrameAt = now;
-    // Re-read the limit every frame: artwork or fonts can change the extent
-    // while the track is still gliding.
     const limit = Math.max(0, container.scrollHeight - container.clientHeight);
-    const goal = Math.min(Math.max(target, 0), limit);
+    const goal = centringOffset(target);
     const remaining = goal - container.scrollTop;
     if (Math.abs(remaining) < SCROLL_SETTLE_PX) {
       expected = goal;
@@ -107,23 +124,13 @@ export function createLyricAutoScroller(container: HTMLElement): LyricAutoScroll
     center(targetEl, options) {
       if (suspended) return;
       if (!options?.force && Date.now() - lastUserScrollAt <= USER_SCROLL_SUPPRESS_MS) return;
-      const containerRect = container.getBoundingClientRect();
-      const targetRect = targetEl.getBoundingClientRect();
-      const limit = Math.max(0, container.scrollHeight - container.clientHeight);
-      const goal = Math.min(
-        Math.max(
-          container.scrollTop + (targetRect.top + targetRect.height / 2) - (containerRect.top + container.clientHeight / 2),
-          0,
-        ),
-        limit,
-      );
       if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
         stop();
-        expected = goal;
-        container.scrollTop = goal;
+        expected = centringOffset(targetEl);
+        container.scrollTop = expected;
         return;
       }
-      target = goal;
+      target = targetEl;
       // The first write waits for the next frame so a freshly rebuilt track is
       // laid out before the glide starts.
       if (frame === null) {
