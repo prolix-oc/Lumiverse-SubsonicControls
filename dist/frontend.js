@@ -1847,8 +1847,11 @@ var SPOTIFY_WIDGET_CSS = `
   scroll-behavior: smooth;
 }
 
-/* Apple Music-esque lyric motion: springy scale on activation, slower fall-off
-   on deactivation, and a gentle depth blur on distant lines. */
+/* Apple Music-esque lyric motion. Focus always moves forward: the leaving line
+   contracts on a short, prompt ease-out while the arriving line springs up
+   behind it, so a sung line never lingers at full size beside its successor.
+   Every property within one direction shares a clock, which stops the depth
+   blur from finishing ahead of the scale it belongs to. */
 .spotify-lyrics-line {
   --spotify-lyrics-line-opacity: 1;
   display: block;
@@ -1862,8 +1865,8 @@ var SPOTIFY_WIDGET_CSS = `
   border-radius: 10px;
   cursor: pointer;
   transition:
-    color 340ms cubic-bezier(0.32, 0.72, 0, 1),
-    opacity 300ms cubic-bezier(0.32, 0.72, 0, 1),
+    color 320ms cubic-bezier(0.25, 0.7, 0.5, 1),
+    opacity 320ms cubic-bezier(0.25, 0.7, 0.5, 1),
     background 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -1881,9 +1884,9 @@ var SPOTIFY_WIDGET_CSS = `
   transform-origin: center center;
   filter: blur(0px);
   transition:
-    transform 520ms cubic-bezier(0.16, 1.1, 0.3, 1),
-    text-shadow 420ms cubic-bezier(0.32, 0.72, 0, 1),
-    filter 320ms cubic-bezier(0.32, 0.72, 0, 1);
+    transform 320ms cubic-bezier(0.25, 0.7, 0.5, 1),
+    filter 320ms cubic-bezier(0.25, 0.7, 0.5, 1),
+    text-shadow 240ms cubic-bezier(0.25, 0.7, 0.5, 1);
 }
 
 .spotify-lyrics-line-text-long {
@@ -1904,13 +1907,21 @@ var SPOTIFY_WIDGET_CSS = `
   --spotify-lyrics-line-opacity: 1;
   color: var(--lumiverse-text);
   opacity: 1;
+  transition:
+    color 520ms cubic-bezier(0.25, 0.7, 0.5, 1),
+    opacity 520ms cubic-bezier(0.25, 0.7, 0.5, 1),
+    background 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/* Only the arriving scale springs. Blur has no negative range, so an
+   overshooting curve would clamp it at sharp well before the line settles. */
 .spotify-lyrics-line-active .spotify-lyrics-line-text {
   transform: translateY(0) scale(1.17);
   text-shadow: 0 0 20px rgba(255, 255, 255, 0.14);
-  filter: blur(0px);
-  transition-duration: 620ms, 420ms, 320ms;
+  transition:
+    transform 520ms cubic-bezier(0.34, 1.5, 0.5, 1),
+    filter 520ms cubic-bezier(0.25, 0.7, 0.5, 1),
+    text-shadow 400ms cubic-bezier(0.25, 0.7, 0.5, 1);
 }
 
 .spotify-lyrics-line-tier-1 {
@@ -1933,7 +1944,6 @@ var SPOTIFY_WIDGET_CSS = `
 
 .spotify-lyrics-line-past {
   --spotify-lyrics-line-opacity: 0.3;
-  transition-duration: 520ms, 520ms, 220ms;
 }
 
 .spotify-lyrics-line-future {
@@ -1960,16 +1970,23 @@ var SPOTIFY_WIDGET_CSS = `
   --spotify-lyrics-line-opacity: 0.24;
 }
 
+/* Depth blur steps stay at or above half a pixel. Sub-pixel radii are
+   quantized by the rasterizer, so animating between them reads as an abrupt
+   pop instead of a gradual fall-off. */
+.spotify-lyrics-line-tier-1 .spotify-lyrics-line-text {
+  filter: blur(0.5px);
+}
+
 .spotify-lyrics-line-tier-2 .spotify-lyrics-line-text {
-  filter: blur(0.35px);
+  filter: blur(1.1px);
 }
 
 .spotify-lyrics-line-tier-3 .spotify-lyrics-line-text {
-  filter: blur(0.7px);
+  filter: blur(1.7px);
 }
 
 .spotify-lyrics-line-tier-4 .spotify-lyrics-line-text {
-  filter: blur(1px);
+  filter: blur(2.4px);
 }
 
 .spotify-lyrics-line-blank {
