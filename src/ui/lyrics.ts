@@ -105,7 +105,10 @@ export function createLyricsUI(): LyricsUI {
       const bodyRect = body.getBoundingClientRect();
       const textRect = line.textEl.getBoundingClientRect();
       const target = body.scrollTop + (textRect.top + textRect.height / 2) - (bodyRect.top + body.clientHeight / 2);
-      body.scrollTo({ top: Math.max(0, Math.min(target, body.scrollHeight - body.clientHeight)), behavior });
+      body.scrollTo({
+        top: Math.max(0, Math.min(target, body.scrollHeight - body.clientHeight)),
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : behavior,
+      });
     });
   }
   function updateLineClasses(nextActiveLineIndex: number, forceCenter = false) {
