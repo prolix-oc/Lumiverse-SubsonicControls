@@ -1,4 +1,5 @@
 import type { PlaybackState } from "../types";
+import { createLyricAutoScroller } from "./lyric-auto-scroll";
 import {
   createSyncedLyricsModel,
   getLineDisplayText,
@@ -30,7 +31,6 @@ interface LyricsPlayback {
   updatedAt: number;
 }
 
-const USER_SCROLL_SUPPRESS_MS = 2500;
 const LOADING_STATUS_DELAY_MS = 180;
 
 function getLineClassName(index: number, activeLineIndex: number, hasText: boolean): string {
@@ -64,53 +64,26 @@ export function createLyricsUI(): LyricsUI {
   let currentTrackUri: string | null = null;
   let syncedLines: SyncedLyricLine[] = [];
   const syncedLyricsModel = createSyncedLyricsModel();
+  const autoScroll = createLyricAutoScroller(body);
   let playback: LyricsPlayback | null = null;
   let activeLineIndex = -1;
-  let tickTimer: ReturnType<typeof setInterval> | null = null;
-  let autoScrollTimer: ReturnType<typeof setTimeout> | null = null;
-  let loadingTimer: ReturnType<typeof setTimeout> | null = null;
-  let isAutoScrolling = false;
-  let lastUserScrollAt = 0;
-  let autoScrollSuspended = false;
+  let tickTimer: ReturnType<typeof setInterval> | undefined;
+  let loadingTimer: ReturnType<typeof setTimeout> | undefined;
 
   function supportsTransport(state: PlaybackState | null): boolean {
     return state?.source === "feishin" || state?.source === "jukebox";
   }
 
   function stopLoadingState() {
-    if (loadingTimer) clearTimeout(loadingTimer);
-    loadingTimer = null;
+    clearTimeout(loadingTimer);
+    loadingTimer = undefined;
     body.classList.remove("spotify-lyrics-loading");
   }
-  function stopAutoScrollTracking() {
-    if (autoScrollTimer) clearTimeout(autoScrollTimer);
-    autoScrollTimer = null;
-    isAutoScrolling = false;
-  }
   function stopTicking() {
-    if (tickTimer) clearInterval(tickTimer);
-    tickTimer = null;
+    clearInterval(tickTimer);
+    tickTimer = undefined;
   }
-  function noteUserScroll() {
-    stopAutoScrollTracking();
-    lastUserScrollAt = Date.now();
-  }
-  body.addEventListener("wheel", noteUserScroll, { passive: true });
-  body.addEventListener("touchmove", noteUserScroll, { passive: true });
-  body.addEventListener("pointerdown", noteUserScroll, { passive: true });
-  body.addEventListener("scroll", () => { if (!isAutoScrolling) lastUserScrollAt = Date.now(); }, { passive: true });
 
-  function centerLine(line: SyncedLyricLine, behavior: ScrollBehavior = "smooth") {
-    requestAnimationFrame(() => {
-      const bodyRect = body.getBoundingClientRect();
-      const textRect = line.textEl.getBoundingClientRect();
-      const target = body.scrollTop + (textRect.top + textRect.height / 2) - (bodyRect.top + body.clientHeight / 2);
-      body.scrollTo({
-        top: Math.max(0, Math.min(target, body.scrollHeight - body.clientHeight)),
-        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : behavior,
-      });
-    });
-  }
   function updateLineClasses(nextActiveLineIndex: number, forceCenter = false) {
     activeLineIndex = nextActiveLineIndex;
     syncedLines.forEach((line) => {
@@ -118,12 +91,7 @@ export function createLyricsUI(): LyricsUI {
       line.el.className = getLineClassName(line.index, activeLineIndex, snapshot?.hasText ?? false);
     });
     const active = syncedLines.find((line) => line.index === activeLineIndex);
-    if (active && !autoScrollSuspended && (forceCenter || Date.now() - lastUserScrollAt > USER_SCROLL_SUPPRESS_MS)) {
-      isAutoScrolling = true;
-      if (autoScrollTimer) clearTimeout(autoScrollTimer);
-      centerLine(active);
-      autoScrollTimer = setTimeout(stopAutoScrollTracking, 700);
-    }
+    if (active) autoScroll.center(active.textEl, { force: forceCenter });
   }
   function updateActiveLine(forceCenter = false) {
     if (!syncedLines.length) return;
@@ -134,7 +102,7 @@ export function createLyricsUI(): LyricsUI {
     if (!tickTimer && syncedLines.length) tickTimer = setInterval(updateActiveLine, 200);
   }
   function clear() {
-    stopTicking(); stopAutoScrollTracking(); stopLoadingState();
+    stopTicking(); autoScroll.cancel(); stopLoadingState();
     body.innerHTML = "";
     body.className = "spotify-lyrics-body";
     currentTrackUri = null;
@@ -147,7 +115,7 @@ export function createLyricsUI(): LyricsUI {
   function setLoading(loading: boolean, playbackState?: PlaybackState | null) {
     stopLoadingState();
     if (!loading) return;
-    stopTicking(); stopAutoScrollTracking();
+    stopTicking(); autoScroll.cancel();
     body.innerHTML = "";
     body.className = "spotify-lyrics-body spotify-lyrics-loading";
     // Keep the same playback epoch as the floating player while the lyric
@@ -213,7 +181,7 @@ export function createLyricsUI(): LyricsUI {
     body.appendChild(text);
   }
   function update(trackUri: string | null, plainLyrics: string | null, syncedLyrics: string | null, instrumental: boolean) {
-    stopTicking(); stopAutoScrollTracking(); stopLoadingState();
+    stopTicking(); autoScroll.cancel(); stopLoadingState();
     currentTrackUri = trackUri;
     body.innerHTML = "";
     syncedLines = [];
@@ -252,12 +220,11 @@ export function createLyricsUI(): LyricsUI {
   return {
     root, update, updatePlayback, setLoading,
     setAutoScrollSuspended(suspended) {
-      if (autoScrollSuspended === suspended) return;
-      autoScrollSuspended = suspended;
-      if (suspended) stopAutoScrollTracking();
-      else if (syncedLines.length) updateLineClasses(activeLineIndex, true);
+      if (autoScroll.suspend(suspended) && !suspended && syncedLines.length) {
+        updateLineClasses(activeLineIndex, true);
+      }
     },
     clear,
-    destroy() { stopTicking(); stopAutoScrollTracking(); stopLoadingState(); root.remove(); },
+    destroy() { stopTicking(); autoScroll.destroy(); stopLoadingState(); root.remove(); },
   };
 }

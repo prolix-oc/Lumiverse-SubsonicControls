@@ -5,8 +5,7 @@ import {
   parseSyncedLyrics,
 } from "./synced-lyrics-model";
 import { bindProgressCommitOnRelease, bindRangeCommitOnRelease } from "./release-commit";
-
-const USER_SCROLL_SUPPRESS_MS = 2500;
+import { createLyricAutoScroller } from "./lyric-auto-scroll";
 
 const ICON_PREV = `<svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>`;
 const ICON_PLAY = `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`;
@@ -338,10 +337,7 @@ export function createModernWidgetPlayerUI(
   let lyricsLoading = false;
   let lastRenderedLyricSignature = "";
   let syncedLyricEls: HTMLDivElement[] = [];
-  let autoScrollTimer: ReturnType<typeof setTimeout> | null = null;
-  let isAutoScrolling = false;
-  let lastUserScrollAt = 0;
-  let autoScrollSuspended = false;
+  const autoScroll = createLyricAutoScroller(lyricsBody);
   let lastMetadataSignature = "";
   let marqueeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let marqueeRefreshTimerLate: ReturnType<typeof setTimeout> | null = null;
@@ -353,26 +349,6 @@ export function createModernWidgetPlayerUI(
   });
   marqueeObserver.observe(meta);
   marqueeObserver.observe(root);
-
-  function stopAutoScrollTracking() {
-    if (autoScrollTimer) {
-      clearTimeout(autoScrollTimer);
-      autoScrollTimer = null;
-    }
-    isAutoScrolling = false;
-  }
-
-  function noteUserScroll() {
-    stopAutoScrollTracking();
-    lastUserScrollAt = Date.now();
-  }
-
-  lyricsBody.addEventListener("wheel", noteUserScroll, { passive: true });
-  lyricsBody.addEventListener("touchmove", noteUserScroll, { passive: true });
-  lyricsBody.addEventListener("pointerdown", noteUserScroll, { passive: true });
-  lyricsBody.addEventListener("scroll", () => {
-    if (!isAutoScrolling) lastUserScrollAt = Date.now();
-  }, { passive: true });
 
   function refreshMarquees(restart: boolean) {
     requestAnimationFrame(() => {
@@ -411,7 +387,7 @@ export function createModernWidgetPlayerUI(
   }
 
   function clearLyricsTrack() {
-    stopAutoScrollTracking();
+    autoScroll.cancel();
     lyricsTrack.innerHTML = "";
     lyricsBody.scrollTop = 0;
     syncedLyricEls = [];
@@ -452,22 +428,9 @@ export function createModernWidgetPlayerUI(
     const activeEl = activeLineIndex >= 0 ? syncedLyricEls[activeLineIndex] : syncedLyricEls[0];
     if (!activeEl || !shouldAutoscroll) return;
 
-    // While a context menu is open, never auto-scroll — a scroll dismisses the menu.
-    if (autoScrollSuspended) return;
-    const shouldCenter = Date.now() - lastUserScrollAt > USER_SCROLL_SUPPRESS_MS;
-    if (!shouldCenter) return;
-
-    requestAnimationFrame(() => {
-      const targetScrollTop = activeEl.offsetTop + activeEl.offsetHeight / 2 - lyricsBody.clientHeight / 2;
-      const maxScrollTop = Math.max(0, lyricsBody.scrollHeight - lyricsBody.clientHeight);
-      isAutoScrolling = true;
-      lyricsBody.scrollTo({
-        top: Math.max(0, Math.min(targetScrollTop, maxScrollTop)),
-        behavior: "smooth",
-      });
-      if (autoScrollTimer) clearTimeout(autoScrollTimer);
-      autoScrollTimer = setTimeout(stopAutoScrollTracking, 700);
-    });
+    // A suspended scroller covers the open context menu case: scrolling would
+    // dismiss the menu, so the scroller stays parked until it closes.
+    autoScroll.center(activeEl);
   }
 
   function renderLyrics() {
@@ -760,11 +723,7 @@ export function createModernWidgetPlayerUI(
     updateLyrics,
     setLyricsLoading,
     setAutoScrollSuspended(suspended: boolean) {
-      if (autoScrollSuspended === suspended) return;
-      autoScrollSuspended = suspended;
-      if (suspended) {
-        stopAutoScrollTracking();
-      } else if (syncedLyricsModel.hasLyrics()) {
+      if (autoScroll.suspend(suspended) && !suspended && syncedLyricsModel.hasLyrics()) {
         // Re-center on the active line now that the menu is gone.
         updateSyncedLyricsPresentation(true);
       }
@@ -782,7 +741,7 @@ export function createModernWidgetPlayerUI(
     },
     destroy() {
       stopTicking();
-      stopAutoScrollTracking();
+      autoScroll.destroy();
       cleanupProgressCommit();
       cleanupVolumeCommit();
       if (marqueeRefreshTimer) clearTimeout(marqueeRefreshTimer);

@@ -1844,7 +1844,6 @@ var SPOTIFY_WIDGET_CSS = `
 
 .spotify-lyrics-synced {
   gap: 2px;
-  scroll-behavior: smooth;
 }
 
 /* Apple Music-esque lyric motion. Focus always moves forward: the leaving line
@@ -2047,9 +2046,6 @@ var SPOTIFY_WIDGET_CSS = `
   .spotify-lyrics-status-loading {
     animation: none !important;
     transition: none;
-  }
-  .spotify-lyrics-synced {
-    scroll-behavior: auto;
   }
 }
 
@@ -2763,6 +2759,107 @@ function createSearchUI(send) {
   } };
 }
 
+// src/ui/lyric-auto-scroll.ts
+var USER_SCROLL_SUPPRESS_MS = 2500;
+var SCROLL_TIME_CONSTANT_MS = 85;
+var SCROLL_MAX_SPEED_PX_PER_S = 3000;
+var SCROLL_SETTLE_PX = 0.5;
+function createLyricAutoScroller(container) {
+  let frame = null;
+  let target = null;
+  let expected = null;
+  let lastUserScrollAt = 0;
+  let suspended = false;
+  let previousFrameAt = 0;
+  function stop() {
+    if (frame !== null)
+      cancelAnimationFrame(frame);
+    frame = null;
+    target = null;
+  }
+  function noteUserScroll() {
+    stop();
+    expected = null;
+    lastUserScrollAt = Date.now();
+  }
+  function step(now) {
+    frame = null;
+    if (target === null || !container.isConnected) {
+      stop();
+      return;
+    }
+    const elapsed = Math.min(Math.max(now - previousFrameAt, 0), 100);
+    previousFrameAt = now;
+    const limit = Math.max(0, container.scrollHeight - container.clientHeight);
+    const goal = Math.min(Math.max(target, 0), limit);
+    const remaining = goal - container.scrollTop;
+    if (Math.abs(remaining) < SCROLL_SETTLE_PX) {
+      expected = goal;
+      container.scrollTop = goal;
+      stop();
+      return;
+    }
+    const eased = remaining * (1 - Math.exp(-elapsed / SCROLL_TIME_CONSTANT_MS));
+    const ceiling = SCROLL_MAX_SPEED_PX_PER_S * (elapsed / 1000);
+    const travel = Math.abs(eased) > ceiling ? Math.sign(eased) * ceiling : eased;
+    const next = Math.min(Math.max(container.scrollTop + travel, 0), limit);
+    expected = next;
+    container.scrollTop = next;
+    frame = requestAnimationFrame(step);
+  }
+  container.addEventListener("wheel", noteUserScroll, { passive: true });
+  container.addEventListener("touchmove", noteUserScroll, { passive: true });
+  container.addEventListener("pointerdown", noteUserScroll, { passive: true });
+  function handleScroll() {
+    if (expected !== null && Math.abs(container.scrollTop - expected) <= 1)
+      return;
+    noteUserScroll();
+  }
+  container.addEventListener("scroll", handleScroll, { passive: true });
+  return {
+    center(targetEl, options) {
+      if (suspended)
+        return;
+      if (!options?.force && Date.now() - lastUserScrollAt <= USER_SCROLL_SUPPRESS_MS)
+        return;
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = targetEl.getBoundingClientRect();
+      const limit = Math.max(0, container.scrollHeight - container.clientHeight);
+      const goal = Math.min(Math.max(container.scrollTop + (targetRect.top + targetRect.height / 2) - (containerRect.top + container.clientHeight / 2), 0), limit);
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        stop();
+        expected = goal;
+        container.scrollTop = goal;
+        return;
+      }
+      target = goal;
+      if (frame === null) {
+        previousFrameAt = performance.now();
+        frame = requestAnimationFrame(step);
+      }
+    },
+    suspend(next) {
+      if (suspended === next)
+        return false;
+      suspended = next;
+      if (suspended)
+        cancel();
+      return true;
+    },
+    cancel() {
+      stop();
+      expected = null;
+    },
+    destroy() {
+      cancel();
+      container.removeEventListener("wheel", noteUserScroll);
+      container.removeEventListener("touchmove", noteUserScroll);
+      container.removeEventListener("pointerdown", noteUserScroll);
+      container.removeEventListener("scroll", handleScroll);
+    }
+  };
+}
+
 // src/ui/synced-lyrics-model.ts
 var EMPTY_SYNCED_LINE_SYMBOL = "♪";
 function parseTimestamp(raw) {
@@ -2890,7 +2987,6 @@ function createSyncedLyricsModel(maxLines) {
 }
 
 // src/ui/lyrics.ts
-var USER_SCROLL_SUPPRESS_MS = 2500;
 var LOADING_STATUS_DELAY_MS = 180;
 function getLineClassName(index, activeLineIndex, hasText) {
   const classes = ["spotify-lyrics-line"];
@@ -2928,55 +3024,22 @@ function createLyricsUI() {
   let currentTrackUri = null;
   let syncedLines = [];
   const syncedLyricsModel = createSyncedLyricsModel();
+  const autoScroll = createLyricAutoScroller(body);
   let playback = null;
   let activeLineIndex = -1;
-  let tickTimer = null;
-  let autoScrollTimer = null;
-  let loadingTimer = null;
-  let isAutoScrolling = false;
-  let lastUserScrollAt = 0;
-  let autoScrollSuspended = false;
+  let tickTimer;
+  let loadingTimer;
   function supportsTransport(state) {
     return state?.source === "feishin" || state?.source === "jukebox";
   }
   function stopLoadingState() {
-    if (loadingTimer)
-      clearTimeout(loadingTimer);
-    loadingTimer = null;
+    clearTimeout(loadingTimer);
+    loadingTimer = undefined;
     body.classList.remove("spotify-lyrics-loading");
   }
-  function stopAutoScrollTracking() {
-    if (autoScrollTimer)
-      clearTimeout(autoScrollTimer);
-    autoScrollTimer = null;
-    isAutoScrolling = false;
-  }
   function stopTicking() {
-    if (tickTimer)
-      clearInterval(tickTimer);
-    tickTimer = null;
-  }
-  function noteUserScroll() {
-    stopAutoScrollTracking();
-    lastUserScrollAt = Date.now();
-  }
-  body.addEventListener("wheel", noteUserScroll, { passive: true });
-  body.addEventListener("touchmove", noteUserScroll, { passive: true });
-  body.addEventListener("pointerdown", noteUserScroll, { passive: true });
-  body.addEventListener("scroll", () => {
-    if (!isAutoScrolling)
-      lastUserScrollAt = Date.now();
-  }, { passive: true });
-  function centerLine(line, behavior = "smooth") {
-    requestAnimationFrame(() => {
-      const bodyRect = body.getBoundingClientRect();
-      const textRect = line.textEl.getBoundingClientRect();
-      const target = body.scrollTop + (textRect.top + textRect.height / 2) - (bodyRect.top + body.clientHeight / 2);
-      body.scrollTo({
-        top: Math.max(0, Math.min(target, body.scrollHeight - body.clientHeight)),
-        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : behavior
-      });
-    });
+    clearInterval(tickTimer);
+    tickTimer = undefined;
   }
   function updateLineClasses(nextActiveLineIndex, forceCenter = false) {
     activeLineIndex = nextActiveLineIndex;
@@ -2985,13 +3048,8 @@ function createLyricsUI() {
       line.el.className = getLineClassName(line.index, activeLineIndex, snapshot?.hasText ?? false);
     });
     const active = syncedLines.find((line) => line.index === activeLineIndex);
-    if (active && !autoScrollSuspended && (forceCenter || Date.now() - lastUserScrollAt > USER_SCROLL_SUPPRESS_MS)) {
-      isAutoScrolling = true;
-      if (autoScrollTimer)
-        clearTimeout(autoScrollTimer);
-      centerLine(active);
-      autoScrollTimer = setTimeout(stopAutoScrollTracking, 700);
-    }
+    if (active)
+      autoScroll.center(active.textEl, { force: forceCenter });
   }
   function updateActiveLine(forceCenter = false) {
     if (!syncedLines.length)
@@ -3006,7 +3064,7 @@ function createLyricsUI() {
   }
   function clear() {
     stopTicking();
-    stopAutoScrollTracking();
+    autoScroll.cancel();
     stopLoadingState();
     body.innerHTML = "";
     body.className = "spotify-lyrics-body";
@@ -3022,7 +3080,7 @@ function createLyricsUI() {
     if (!loading)
       return;
     stopTicking();
-    stopAutoScrollTracking();
+    autoScroll.cancel();
     body.innerHTML = "";
     body.className = "spotify-lyrics-body spotify-lyrics-loading";
     currentTrackUri = playbackState?.trackUri ?? currentTrackUri;
@@ -3091,7 +3149,7 @@ function createLyricsUI() {
   }
   function update(trackUri, plainLyrics, syncedLyrics, instrumental) {
     stopTicking();
-    stopAutoScrollTracking();
+    autoScroll.cancel();
     stopLoadingState();
     currentTrackUri = trackUri;
     body.innerHTML = "";
@@ -3136,18 +3194,14 @@ function createLyricsUI() {
     updatePlayback,
     setLoading,
     setAutoScrollSuspended(suspended) {
-      if (autoScrollSuspended === suspended)
-        return;
-      autoScrollSuspended = suspended;
-      if (suspended)
-        stopAutoScrollTracking();
-      else if (syncedLines.length)
+      if (autoScroll.suspend(suspended) && !suspended && syncedLines.length) {
         updateLineClasses(activeLineIndex, true);
+      }
     },
     clear,
     destroy() {
       stopTicking();
-      stopAutoScrollTracking();
+      autoScroll.destroy();
       stopLoadingState();
       root.remove();
     }
@@ -4037,7 +4091,6 @@ function createMiniPlayerUI(sendToBackend, onExpandClick, getWidgetRect) {
 }
 
 // src/ui/modern-widget-player.ts
-var USER_SCROLL_SUPPRESS_MS2 = 2500;
 var ICON_PREV2 = `<svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>`;
 var ICON_PLAY2 = `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`;
 var ICON_PAUSE2 = `<svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>`;
@@ -4305,10 +4358,7 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
   let lyricsLoading = false;
   let lastRenderedLyricSignature = "";
   let syncedLyricEls = [];
-  let autoScrollTimer = null;
-  let isAutoScrolling = false;
-  let lastUserScrollAt = 0;
-  let autoScrollSuspended = false;
+  const autoScroll = createLyricAutoScroller(lyricsBody);
   let lastMetadataSignature = "";
   let marqueeRefreshTimer = null;
   let marqueeRefreshTimerLate = null;
@@ -4319,24 +4369,6 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
   });
   marqueeObserver.observe(meta);
   marqueeObserver.observe(root);
-  function stopAutoScrollTracking() {
-    if (autoScrollTimer) {
-      clearTimeout(autoScrollTimer);
-      autoScrollTimer = null;
-    }
-    isAutoScrolling = false;
-  }
-  function noteUserScroll() {
-    stopAutoScrollTracking();
-    lastUserScrollAt = Date.now();
-  }
-  lyricsBody.addEventListener("wheel", noteUserScroll, { passive: true });
-  lyricsBody.addEventListener("touchmove", noteUserScroll, { passive: true });
-  lyricsBody.addEventListener("pointerdown", noteUserScroll, { passive: true });
-  lyricsBody.addEventListener("scroll", () => {
-    if (!isAutoScrolling)
-      lastUserScrollAt = Date.now();
-  }, { passive: true });
   function refreshMarquees(restart) {
     requestAnimationFrame(() => {
       trackName.refresh(isExpandedState, restart);
@@ -4371,7 +4403,7 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
     compactProgress.style.opacity = visible ? "1" : "0";
   }
   function clearLyricsTrack() {
-    stopAutoScrollTracking();
+    autoScroll.cancel();
     lyricsTrack.innerHTML = "";
     lyricsBody.scrollTop = 0;
     syncedLyricEls = [];
@@ -4413,23 +4445,7 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
     const activeEl = activeLineIndex >= 0 ? syncedLyricEls[activeLineIndex] : syncedLyricEls[0];
     if (!activeEl || !shouldAutoscroll)
       return;
-    if (autoScrollSuspended)
-      return;
-    const shouldCenter = Date.now() - lastUserScrollAt > USER_SCROLL_SUPPRESS_MS2;
-    if (!shouldCenter)
-      return;
-    requestAnimationFrame(() => {
-      const targetScrollTop = activeEl.offsetTop + activeEl.offsetHeight / 2 - lyricsBody.clientHeight / 2;
-      const maxScrollTop = Math.max(0, lyricsBody.scrollHeight - lyricsBody.clientHeight);
-      isAutoScrolling = true;
-      lyricsBody.scrollTo({
-        top: Math.max(0, Math.min(targetScrollTop, maxScrollTop)),
-        behavior: "smooth"
-      });
-      if (autoScrollTimer)
-        clearTimeout(autoScrollTimer);
-      autoScrollTimer = setTimeout(stopAutoScrollTracking, 700);
-    });
+    autoScroll.center(activeEl);
   }
   function renderLyrics() {
     clearLyricsTrack();
@@ -4696,12 +4712,7 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
     updateLyrics,
     setLyricsLoading,
     setAutoScrollSuspended(suspended) {
-      if (autoScrollSuspended === suspended)
-        return;
-      autoScrollSuspended = suspended;
-      if (suspended) {
-        stopAutoScrollTracking();
-      } else if (syncedLyricsModel.hasLyrics()) {
+      if (autoScroll.suspend(suspended) && !suspended && syncedLyricsModel.hasLyrics()) {
         updateSyncedLyricsPresentation(true);
       }
     },
@@ -4718,7 +4729,7 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
     },
     destroy() {
       stopTicking();
-      stopAutoScrollTracking();
+      autoScroll.destroy();
       cleanupProgressCommit();
       cleanupVolumeCommit();
       if (marqueeRefreshTimer)

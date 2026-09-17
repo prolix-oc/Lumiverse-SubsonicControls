@@ -1843,7 +1843,6 @@ export const SPOTIFY_WIDGET_CSS = `
 
 .spotify-lyrics-synced {
   gap: 2px;
-  scroll-behavior: smooth;
 }
 
 /* Apple Music-esque lyric motion. Focus always moves forward: the leaving line
@@ -2046,9 +2045,6 @@ export const SPOTIFY_WIDGET_CSS = `
   .spotify-lyrics-status-loading {
     animation: none !important;
     transition: none;
-  }
-  .spotify-lyrics-synced {
-    scroll-behavior: auto;
   }
 }
 
