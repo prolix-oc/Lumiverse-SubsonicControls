@@ -133,6 +133,8 @@ export interface ModernWidgetPlayerUI {
   update(state: PlaybackState | null, connected: boolean): void;
   updateLyrics(trackUri: string | null, plainLyrics: string | null, syncedLyrics: string | null, instrumental: boolean): void;
   setLyricsLoading(loading: boolean): void;
+  /** Turns off the blur-in of lyric lines. This player has no depth blur. */
+  setLyricsBlur(enabled: boolean): void;
   setAutoScrollSuspended(suspended: boolean): void;
   setCollapsedSize(size: number): void;
   setExpanded(expanded: boolean): void;
@@ -722,6 +724,12 @@ export function createModernWidgetPlayerUI(
     update,
     updateLyrics,
     setLyricsLoading,
+    setLyricsBlur(enabled: boolean) {
+      // The lyric lines of this player are re-colored per tier but never
+      // depth-blurred, so the setting only drives their blur-in animation.
+      if (enabled) lyricsSection.style.removeProperty("--spotify-lyrics-enter-blur");
+      else lyricsSection.style.setProperty("--spotify-lyrics-enter-blur", "0px");
+    },
     setAutoScrollSuspended(suspended: boolean) {
       if (autoScroll.suspend(suspended) && !suspended && syncedLyricsModel.hasLyrics()) {
         // Re-center on the active line now that the menu is gone.

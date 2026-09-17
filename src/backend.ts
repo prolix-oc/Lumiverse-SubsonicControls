@@ -286,7 +286,12 @@ function normalizeWidgetPrefs(value: unknown): WidgetPrefs | null {
     || (prefs.shape !== "circle" && prefs.shape !== "squircle")
     || (prefs.sizeMode !== "small" && prefs.sizeMode !== "medium" && prefs.sizeMode !== "large" && prefs.sizeMode !== "custom")
     || (prefs.miniPlayerStyle !== "default" && prefs.miniPlayerStyle !== "modern")) return null;
-  const normalized: WidgetPrefs = { size: prefs.size, shape: prefs.shape, sizeMode: prefs.sizeMode, miniPlayerStyle: prefs.miniPlayerStyle };
+  const normalized: WidgetPrefs = {
+    size: prefs.size, shape: prefs.shape, sizeMode: prefs.sizeMode, miniPlayerStyle: prefs.miniPlayerStyle,
+    // Preferences written before the toggle existed carry no value; blur stays
+    // on for them.
+    lyricsBlur: prefs.lyricsBlur !== false,
+  };
   if (typeof prefs.x === "number" && Number.isFinite(prefs.x)) normalized.x = prefs.x;
   if (typeof prefs.y === "number" && Number.isFinite(prefs.y)) normalized.y = prefs.y;
   return normalized;

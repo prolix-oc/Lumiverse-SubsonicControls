@@ -148,6 +148,23 @@ export const SPOTIFY_WIDGET_CSS = `
   background: rgba(231, 76, 60, 0.1);
 }
 
+.spotify-settings-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+}
+
+.spotify-settings-check input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #1db954;
+  cursor: pointer;
+}
+
 .spotify-status {
   font-size: 11px;
   color: var(--lumiverse-text-dim);
@@ -1964,16 +1981,18 @@ export const SPOTIFY_WIDGET_CSS = `
 /* Depth blur is static and sits only on receding lines, never on the active or
    adjacent line. A blur that animates, or that shares an element with a
    transform, forces the compositor to re-rasterize that layer every frame and
-   leaves the text visibly soft mid-scale. */
-.spotify-lyrics-line-tier-2 .spotify-lyrics-line-text {
+   leaves the text visibly soft mid-scale. These classes are emitted only while
+   the Lyrics blur setting is on, so a disabled blur leaves the text unfiltered
+   instead of carrying a no-op blur(0). */
+.spotify-lyrics-line-blur-2 .spotify-lyrics-line-text {
   filter: blur(0.8px);
 }
 
-.spotify-lyrics-line-tier-3 .spotify-lyrics-line-text {
+.spotify-lyrics-line-blur-3 .spotify-lyrics-line-text {
   filter: blur(1.5px);
 }
 
-.spotify-lyrics-line-tier-4 .spotify-lyrics-line-text {
+.spotify-lyrics-line-blur-4 .spotify-lyrics-line-text {
   filter: blur(2.2px);
 }
 
@@ -2010,11 +2029,16 @@ export const SPOTIFY_WIDGET_CSS = `
   }
 }
 
+/* The blur-in radius is a variable so the Lyrics blur setting can zero it
+   without a second copy of the motion. A custom property inside @keyframes is
+   substituted when the animation starts, which is the only moment that
+   matters here: the element is created, and the setting read, before it is
+   inserted. */
 @keyframes spotify-lyrics-line-in {
   from {
     opacity: 0;
     transform: translateY(16px);
-    filter: blur(8px);
+    filter: blur(var(--spotify-lyrics-enter-blur, 8px));
   }
 
   to {
@@ -2028,7 +2052,7 @@ export const SPOTIFY_WIDGET_CSS = `
   from {
     opacity: 0;
     transform: translateY(10px);
-    filter: blur(6px);
+    filter: blur(var(--spotify-lyrics-enter-blur, 6px));
   }
 
   to {

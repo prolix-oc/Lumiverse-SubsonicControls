@@ -765,7 +765,13 @@ function normalizeWidgetPrefs(value) {
   const prefs = value;
   if (typeof prefs.size !== "number" || !Number.isFinite(prefs.size) || prefs.shape !== "circle" && prefs.shape !== "squircle" || prefs.sizeMode !== "small" && prefs.sizeMode !== "medium" && prefs.sizeMode !== "large" && prefs.sizeMode !== "custom" || prefs.miniPlayerStyle !== "default" && prefs.miniPlayerStyle !== "modern")
     return null;
-  const normalized = { size: prefs.size, shape: prefs.shape, sizeMode: prefs.sizeMode, miniPlayerStyle: prefs.miniPlayerStyle };
+  const normalized = {
+    size: prefs.size,
+    shape: prefs.shape,
+    sizeMode: prefs.sizeMode,
+    miniPlayerStyle: prefs.miniPlayerStyle,
+    lyricsBlur: prefs.lyricsBlur !== false
+  };
   if (typeof prefs.x === "number" && Number.isFinite(prefs.x))
     normalized.x = prefs.x;
   if (typeof prefs.y === "number" && Number.isFinite(prefs.y))

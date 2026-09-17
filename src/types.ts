@@ -66,6 +66,8 @@ export interface WidgetPrefs {
   shape: "circle" | "squircle";
   sizeMode: "small" | "medium" | "large" | "custom";
   miniPlayerStyle: MiniPlayerStyle;
+  /** Absent means enabled. When false, lyric text stays crisp: no depth blur and no blur-in. */
+  lyricsBlur?: boolean;
   x?: number;
   y?: number;
 }

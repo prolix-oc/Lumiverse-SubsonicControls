@@ -149,6 +149,23 @@ var SPOTIFY_WIDGET_CSS = `
   background: rgba(231, 76, 60, 0.1);
 }
 
+.spotify-settings-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+}
+
+.spotify-settings-check input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #1db954;
+  cursor: pointer;
+}
+
 .spotify-status {
   font-size: 11px;
   color: var(--lumiverse-text-dim);
@@ -1965,16 +1982,18 @@ var SPOTIFY_WIDGET_CSS = `
 /* Depth blur is static and sits only on receding lines, never on the active or
    adjacent line. A blur that animates, or that shares an element with a
    transform, forces the compositor to re-rasterize that layer every frame and
-   leaves the text visibly soft mid-scale. */
-.spotify-lyrics-line-tier-2 .spotify-lyrics-line-text {
+   leaves the text visibly soft mid-scale. These classes are emitted only while
+   the Lyrics blur setting is on, so a disabled blur leaves the text unfiltered
+   instead of carrying a no-op blur(0). */
+.spotify-lyrics-line-blur-2 .spotify-lyrics-line-text {
   filter: blur(0.8px);
 }
 
-.spotify-lyrics-line-tier-3 .spotify-lyrics-line-text {
+.spotify-lyrics-line-blur-3 .spotify-lyrics-line-text {
   filter: blur(1.5px);
 }
 
-.spotify-lyrics-line-tier-4 .spotify-lyrics-line-text {
+.spotify-lyrics-line-blur-4 .spotify-lyrics-line-text {
   filter: blur(2.2px);
 }
 
@@ -2011,11 +2030,16 @@ var SPOTIFY_WIDGET_CSS = `
   }
 }
 
+/* The blur-in radius is a variable so the Lyrics blur setting can zero it
+   without a second copy of the motion. A custom property inside @keyframes is
+   substituted when the animation starts, which is the only moment that
+   matters here: the element is created, and the setting read, before it is
+   inserted. */
 @keyframes spotify-lyrics-line-in {
   from {
     opacity: 0;
     transform: translateY(16px);
-    filter: blur(8px);
+    filter: blur(var(--spotify-lyrics-enter-blur, 8px));
   }
 
   to {
@@ -2029,7 +2053,7 @@ var SPOTIFY_WIDGET_CSS = `
   from {
     opacity: 0;
     transform: translateY(10px);
-    filter: blur(6px);
+    filter: blur(var(--spotify-lyrics-enter-blur, 6px));
   }
 
   to {
@@ -2991,7 +3015,7 @@ function createSyncedLyricsModel(maxLines) {
 
 // src/ui/lyrics.ts
 var LOADING_STATUS_DELAY_MS = 180;
-function getLineClassName(index, activeLineIndex, hasText) {
+function getLineClassName(index, activeLineIndex, hasText, blurEnabled) {
   const classes = ["spotify-lyrics-line"];
   if (!hasText)
     classes.push("spotify-lyrics-line-blank");
@@ -3003,14 +3027,12 @@ function getLineClassName(index, activeLineIndex, hasText) {
     classes.push("spotify-lyrics-line-future");
   if (activeLineIndex >= 0) {
     const distance = Math.abs(index - activeLineIndex);
-    if (distance === 1)
-      classes.push("spotify-lyrics-line-tier-1");
-    else if (distance === 2)
-      classes.push("spotify-lyrics-line-tier-2");
-    else if (distance === 3)
-      classes.push("spotify-lyrics-line-tier-3");
-    else if (distance >= 4)
-      classes.push("spotify-lyrics-line-tier-4");
+    if (distance >= 1) {
+      const tier = Math.min(distance, 4);
+      classes.push(`spotify-lyrics-line-tier-${tier}`);
+      if (blurEnabled && tier >= 2)
+        classes.push(`spotify-lyrics-line-blur-${tier}`);
+    }
   }
   return classes.join(" ");
 }
@@ -3030,6 +3052,7 @@ function createLyricsUI() {
   const autoScroll = createLyricAutoScroller(body);
   let playback = null;
   let activeLineIndex = -1;
+  let blurEnabled = true;
   let tickTimer;
   let loadingTimer;
   function supportsTransport(state) {
@@ -3044,12 +3067,21 @@ function createLyricsUI() {
     clearInterval(tickTimer);
     tickTimer = undefined;
   }
-  function updateLineClasses(nextActiveLineIndex, forceCenter = false) {
-    activeLineIndex = nextActiveLineIndex;
+  function refreshLineClasses() {
     syncedLines.forEach((line) => {
       const snapshot = syncedLyricsModel.getIndexedLines()[line.index];
-      line.el.className = getLineClassName(line.index, activeLineIndex, snapshot?.hasText ?? false);
+      line.el.className = getLineClassName(line.index, activeLineIndex, snapshot?.hasText ?? false, blurEnabled);
     });
+  }
+  function applyEnterBlur() {
+    if (blurEnabled)
+      root.style.removeProperty("--spotify-lyrics-enter-blur");
+    else
+      root.style.setProperty("--spotify-lyrics-enter-blur", "0px");
+  }
+  function updateLineClasses(nextActiveLineIndex, forceCenter = false) {
+    activeLineIndex = nextActiveLineIndex;
+    refreshLineClasses();
     const active = syncedLines.find((line) => line.index === activeLineIndex);
     if (active)
       autoScroll.center(active.textEl, { force: forceCenter });
@@ -3124,7 +3156,7 @@ function createLyricsUI() {
     syncedLines = snapshot.lines.map((line, renderIndex) => {
       const el = document.createElement("div");
       const textEl = document.createElement("div");
-      el.className = getLineClassName(line.index, activeLineIndex, line.hasText);
+      el.className = getLineClassName(line.index, activeLineIndex, line.hasText, blurEnabled);
       el.classList.add("spotify-lyrics-line-enter");
       el.style.setProperty("--spotify-lyrics-enter-delay", `${Math.min(renderIndex * 28, 280)}ms`);
       textEl.className = "spotify-lyrics-line-text";
@@ -3200,6 +3232,13 @@ function createLyricsUI() {
       if (autoScroll.suspend(suspended) && !suspended && syncedLines.length) {
         updateLineClasses(activeLineIndex, true);
       }
+    },
+    setBlurEnabled(enabled) {
+      if (blurEnabled === enabled)
+        return;
+      blurEnabled = enabled;
+      applyEnterBlur();
+      refreshLineClasses();
     },
     clear,
     destroy() {
@@ -4714,6 +4753,12 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
     update,
     updateLyrics,
     setLyricsLoading,
+    setLyricsBlur(enabled) {
+      if (enabled)
+        lyricsSection.style.removeProperty("--spotify-lyrics-enter-blur");
+      else
+        lyricsSection.style.setProperty("--spotify-lyrics-enter-blur", "0px");
+    },
     setAutoScrollSuspended(suspended) {
       if (autoScroll.suspend(suspended) && !suspended && syncedLyricsModel.hasLyrics()) {
         updateSyncedLyricsPresentation(true);
@@ -5247,12 +5292,15 @@ function setup(ctx) {
   let currentArtShape = "circle";
   let currentSizeMode = "medium";
   let currentMiniPlayerStyle = "default";
+  let currentLyricsBlur = true;
   let savedWidgetPosition;
   let localWidgetPreferences = null;
   try {
     const stored = JSON.parse(localStorage.getItem(WIDGET_PREFS_KEY) || "null");
     if (stored?.miniPlayerStyle === "modern")
       currentMiniPlayerStyle = "modern";
+    if (stored?.lyricsBlur === false)
+      currentLyricsBlur = false;
     if (typeof stored?.size === "number")
       currentWidgetSize = clampWidgetSize(stored.size, currentMiniPlayerStyle);
     if (stored?.shape === "squircle")
@@ -5269,6 +5317,7 @@ function setup(ctx) {
         shape: currentArtShape,
         sizeMode: currentSizeMode,
         miniPlayerStyle: currentMiniPlayerStyle,
+        lyricsBlur: currentLyricsBlur,
         ...savedWidgetPosition
       };
     }
@@ -5283,6 +5332,7 @@ function setup(ctx) {
       shape: currentArtShape,
       sizeMode: currentSizeMode,
       miniPlayerStyle: currentMiniPlayerStyle,
+      lyricsBlur: currentLyricsBlur,
       x: position.x,
       y: position.y
     };
@@ -5341,6 +5391,40 @@ function setup(ctx) {
     settingsBody.append(divider, label);
   }
   updateWidgetCustomizationUI();
+  let lyricsBlurInput = null;
+  function updateLyricsBlurUI() {
+    if (lyricsBlurInput)
+      lyricsBlurInput.checked = currentLyricsBlur;
+  }
+  function applyLyricsBlur() {
+    lyrics.setBlurEnabled(currentLyricsBlur);
+    modernWidget.setLyricsBlur(currentLyricsBlur);
+    updateLyricsBlurUI();
+  }
+  if (settingsBody) {
+    const divider = document.createElement("div");
+    divider.style.cssText = "height:1px;background:var(--lumiverse-border);margin:4px 0";
+    const toggle = document.createElement("label");
+    toggle.className = "spotify-settings-check";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = currentLyricsBlur;
+    lyricsBlurInput = checkbox;
+    const toggleLabel = document.createElement("span");
+    toggleLabel.textContent = "Lyrics blur";
+    toggle.append(checkbox, toggleLabel);
+    const hint = document.createElement("div");
+    hint.style.cssText = "font-size:0.8em;opacity:0.65;margin-top:4px";
+    hint.textContent = "Depth-blurs receding lyric lines and fades new lines in through a blur. Turn off for crisp text.";
+    const field = document.createElement("div");
+    field.append(toggle, hint);
+    checkbox.addEventListener("change", () => {
+      currentLyricsBlur = checkbox.checked;
+      applyLyricsBlur();
+      saveWidgetPrefs();
+    });
+    settingsBody.append(divider, field);
+  }
   const widgetContent = document.createElement("div");
   widgetContent.className = "spotify-float-widget";
   function animateWidgetMount() {
@@ -5499,6 +5583,7 @@ function setup(ctx) {
     const style = preferences.miniPlayerStyle === "modern" ? "modern" : "default";
     const sizeMode = isSizeMode(preferences.sizeMode) ? preferences.sizeMode : inferSizeMode(preferences.size, style);
     currentMiniPlayerStyle = style;
+    currentLyricsBlur = preferences.lyricsBlur !== false;
     currentArtShape = preferences.shape === "squircle" ? "squircle" : "circle";
     currentSizeMode = sizeMode;
     currentWidgetSize = sizeMode === "custom" ? clampWidgetSize(preferences.size, style) : getSizePresets(style)[sizeMode];
@@ -5512,6 +5597,7 @@ function setup(ctx) {
     updateWidgetCustomizationUI();
     createWidget(position);
     clampWidgetPosition();
+    applyLyricsBlur();
   }
   let openContextMenuCount = 0;
   async function showWidgetMenu(x, y) {
@@ -5670,6 +5756,7 @@ function setup(ctx) {
   });
   createWidget();
   clampWidgetPosition();
+  applyLyricsBlur();
   const handleWidgetViewportResize = () => {
     if (currentMiniPlayerStyle === "modern" && modernWidgetExpanded) {
       applyWidgetStyle();

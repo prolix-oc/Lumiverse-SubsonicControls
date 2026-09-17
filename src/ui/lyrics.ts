@@ -13,6 +13,8 @@ export interface LyricsUI {
   updatePlayback(state: PlaybackState | null): void;
   setLoading(loading: boolean, playbackState?: PlaybackState | null): void;
   setAutoScrollSuspended(suspended: boolean): void;
+  /** Turns the receding-line depth blur and the blur-in animation on or off. */
+  setBlurEnabled(enabled: boolean): void;
   clear(): void;
   destroy(): void;
 }
@@ -33,7 +35,7 @@ interface LyricsPlayback {
 
 const LOADING_STATUS_DELAY_MS = 180;
 
-function getLineClassName(index: number, activeLineIndex: number, hasText: boolean): string {
+function getLineClassName(index: number, activeLineIndex: number, hasText: boolean, blurEnabled: boolean): string {
   const classes = ["spotify-lyrics-line"];
   if (!hasText) classes.push("spotify-lyrics-line-blank");
   if (index === activeLineIndex) classes.push("spotify-lyrics-line-active");
@@ -41,10 +43,13 @@ function getLineClassName(index: number, activeLineIndex: number, hasText: boole
   else classes.push("spotify-lyrics-line-future");
   if (activeLineIndex >= 0) {
     const distance = Math.abs(index - activeLineIndex);
-    if (distance === 1) classes.push("spotify-lyrics-line-tier-1");
-    else if (distance === 2) classes.push("spotify-lyrics-line-tier-2");
-    else if (distance === 3) classes.push("spotify-lyrics-line-tier-3");
-    else if (distance >= 4) classes.push("spotify-lyrics-line-tier-4");
+    if (distance >= 1) {
+      const tier = Math.min(distance, 4);
+      classes.push(`spotify-lyrics-line-tier-${tier}`);
+      // The active line and its neighbour stay sharp so the eye has a crisp
+      // edge to land on; blur only starts two lines out.
+      if (blurEnabled && tier >= 2) classes.push(`spotify-lyrics-line-blur-${tier}`);
+    }
   }
   return classes.join(" ");
 }
@@ -67,6 +72,7 @@ export function createLyricsUI(): LyricsUI {
   const autoScroll = createLyricAutoScroller(body);
   let playback: LyricsPlayback | null = null;
   let activeLineIndex = -1;
+  let blurEnabled = true;
   let tickTimer: ReturnType<typeof setInterval> | undefined;
   let loadingTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -84,12 +90,19 @@ export function createLyricsUI(): LyricsUI {
     tickTimer = undefined;
   }
 
-  function updateLineClasses(nextActiveLineIndex: number, forceCenter = false) {
-    activeLineIndex = nextActiveLineIndex;
+  function refreshLineClasses() {
     syncedLines.forEach((line) => {
       const snapshot = syncedLyricsModel.getIndexedLines()[line.index];
-      line.el.className = getLineClassName(line.index, activeLineIndex, snapshot?.hasText ?? false);
+      line.el.className = getLineClassName(line.index, activeLineIndex, snapshot?.hasText ?? false, blurEnabled);
     });
+  }
+  function applyEnterBlur() {
+    if (blurEnabled) root.style.removeProperty("--spotify-lyrics-enter-blur");
+    else root.style.setProperty("--spotify-lyrics-enter-blur", "0px");
+  }
+  function updateLineClasses(nextActiveLineIndex: number, forceCenter = false) {
+    activeLineIndex = nextActiveLineIndex;
+    refreshLineClasses();
     const active = syncedLines.find((line) => line.index === activeLineIndex);
     if (active) autoScroll.center(active.textEl, { force: forceCenter });
   }
@@ -157,7 +170,7 @@ export function createLyricsUI(): LyricsUI {
     syncedLines = snapshot.lines.map((line, renderIndex) => {
       const el = document.createElement("div");
       const textEl = document.createElement("div");
-      el.className = getLineClassName(line.index, activeLineIndex, line.hasText);
+      el.className = getLineClassName(line.index, activeLineIndex, line.hasText, blurEnabled);
       el.classList.add("spotify-lyrics-line-enter");
       el.style.setProperty("--spotify-lyrics-enter-delay", `${Math.min(renderIndex * 28, 280)}ms`);
       textEl.className = "spotify-lyrics-line-text";
@@ -223,6 +236,12 @@ export function createLyricsUI(): LyricsUI {
       if (autoScroll.suspend(suspended) && !suspended && syncedLines.length) {
         updateLineClasses(activeLineIndex, true);
       }
+    },
+    setBlurEnabled(enabled: boolean) {
+      if (blurEnabled === enabled) return;
+      blurEnabled = enabled;
+      applyEnterBlur();
+      refreshLineClasses();
     },
     clear,
     destroy() { stopTicking(); autoScroll.destroy(); stopLoadingState(); root.remove(); },

@@ -249,13 +249,17 @@ export function setup(ctx: SpindleFrontendContext) {
   let currentArtShape: ArtShape = "circle";
   let currentSizeMode: SizeMode = "medium";
   let currentMiniPlayerStyle: MiniPlayerStyle = "default";
+  // Lyrics blur is not widget-specific: the drawer lyrics and the modern
+  // player both read it, so it rides with the rest of the UI preferences.
+  let currentLyricsBlur = true;
   let savedWidgetPosition: { x: number; y: number } | undefined;
   let localWidgetPreferences: WidgetPrefs | null = null;
   try {
     const stored = JSON.parse(localStorage.getItem(WIDGET_PREFS_KEY) || "null") as {
-      size?: unknown; shape?: unknown; sizeMode?: unknown; miniPlayerStyle?: unknown; x?: unknown; y?: unknown;
+      size?: unknown; shape?: unknown; sizeMode?: unknown; miniPlayerStyle?: unknown; lyricsBlur?: unknown; x?: unknown; y?: unknown;
     } | null;
     if (stored?.miniPlayerStyle === "modern") currentMiniPlayerStyle = "modern";
+    if (stored?.lyricsBlur === false) currentLyricsBlur = false;
     if (typeof stored?.size === "number") currentWidgetSize = clampWidgetSize(stored.size, currentMiniPlayerStyle);
     if (stored?.shape === "squircle") currentArtShape = "squircle";
     currentSizeMode = isSizeMode(stored?.sizeMode) ? stored.sizeMode : inferSizeMode(currentWidgetSize, currentMiniPlayerStyle);
@@ -269,6 +273,7 @@ export function setup(ctx: SpindleFrontendContext) {
         shape: currentArtShape,
         sizeMode: currentSizeMode,
         miniPlayerStyle: currentMiniPlayerStyle,
+        lyricsBlur: currentLyricsBlur,
         ...savedWidgetPosition,
       };
     }
@@ -280,7 +285,9 @@ export function setup(ctx: SpindleFrontendContext) {
   function saveWidgetPrefs() {
     const position = widget.getPosition();
     const preferences: WidgetPrefs = {
-      size: currentWidgetSize, shape: currentArtShape, sizeMode: currentSizeMode, miniPlayerStyle: currentMiniPlayerStyle, x: position.x, y: position.y,
+      size: currentWidgetSize, shape: currentArtShape, sizeMode: currentSizeMode, miniPlayerStyle: currentMiniPlayerStyle,
+      lyricsBlur: currentLyricsBlur,
+      x: position.x, y: position.y,
     };
     // Keep the browser copy as an offline/older-host fallback, while the
     // authoritative copy follows the signed-in user through userStorage.
@@ -344,6 +351,40 @@ export function setup(ctx: SpindleFrontendContext) {
     settingsBody.append(divider, label);
   }
   updateWidgetCustomizationUI();
+
+  let lyricsBlurInput: HTMLInputElement | null = null;
+  function updateLyricsBlurUI() {
+    if (lyricsBlurInput) lyricsBlurInput.checked = currentLyricsBlur;
+  }
+  function applyLyricsBlur() {
+    lyrics.setBlurEnabled(currentLyricsBlur);
+    modernWidget.setLyricsBlur(currentLyricsBlur);
+    updateLyricsBlurUI();
+  }
+  if (settingsBody) {
+    const divider = document.createElement("div");
+    divider.style.cssText = "height:1px;background:var(--lumiverse-border);margin:4px 0";
+    const toggle = document.createElement("label");
+    toggle.className = "spotify-settings-check";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = currentLyricsBlur;
+    lyricsBlurInput = checkbox;
+    const toggleLabel = document.createElement("span");
+    toggleLabel.textContent = "Lyrics blur";
+    toggle.append(checkbox, toggleLabel);
+    const hint = document.createElement("div");
+    hint.style.cssText = "font-size:0.8em;opacity:0.65;margin-top:4px";
+    hint.textContent = "Depth-blurs receding lyric lines and fades new lines in through a blur. Turn off for crisp text.";
+    const field = document.createElement("div");
+    field.append(toggle, hint);
+    checkbox.addEventListener("change", () => {
+      currentLyricsBlur = checkbox.checked;
+      applyLyricsBlur();
+      saveWidgetPrefs();
+    });
+    settingsBody.append(divider, field);
+  }
 
   const widgetContent = document.createElement("div");
   widgetContent.className = "spotify-float-widget";
@@ -515,6 +556,7 @@ export function setup(ctx: SpindleFrontendContext) {
     const style = preferences.miniPlayerStyle === "modern" ? "modern" : "default";
     const sizeMode = isSizeMode(preferences.sizeMode) ? preferences.sizeMode : inferSizeMode(preferences.size, style);
     currentMiniPlayerStyle = style;
+    currentLyricsBlur = preferences.lyricsBlur !== false;
     currentArtShape = preferences.shape === "squircle" ? "squircle" : "circle";
     currentSizeMode = sizeMode;
     currentWidgetSize = sizeMode === "custom"
@@ -532,6 +574,7 @@ export function setup(ctx: SpindleFrontendContext) {
     updateWidgetCustomizationUI();
     createWidget(position);
     clampWidgetPosition();
+    applyLyricsBlur();
   }
 
   let openContextMenuCount = 0;
@@ -696,6 +739,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
   createWidget();
   clampWidgetPosition();
+  applyLyricsBlur();
   const handleWidgetViewportResize = () => {
     if (currentMiniPlayerStyle === "modern" && modernWidgetExpanded) {
       applyWidgetStyle();
