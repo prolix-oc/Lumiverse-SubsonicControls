@@ -3,7 +3,6 @@ import { createCrossfadeArt, getTrackScopedArtUrl } from "./crossfade-art";
 import {
   createSyncedLyricsModel,
   parseSyncedLyrics,
-  shouldReserveScaleGutter,
 } from "./synced-lyrics-model";
 import { bindProgressCommitOnRelease, bindRangeCommitOnRelease } from "./release-commit";
 
@@ -425,9 +424,6 @@ export function createModernWidgetPlayerUI(
       const el = document.createElement("div");
       el.className = "spotify-modern-widget-lyric-line spotify-modern-widget-lyric-line-enter";
       el.style.setProperty("--spotify-modern-lyric-enter-delay", `${Math.min(renderIndex * 22, 110)}ms`);
-      if (shouldReserveScaleGutter(line.text)) {
-        el.classList.add("spotify-modern-widget-lyric-line-long");
-      }
       el.textContent = line.displayText;
       lyricsTrack.appendChild(el);
       return el;
@@ -441,9 +437,6 @@ export function createModernWidgetPlayerUI(
       const el = syncedLyricEls[idx];
       if (!el) return;
       el.className = "spotify-modern-widget-lyric-line";
-      if (shouldReserveScaleGutter(line.text)) {
-        el.classList.add("spotify-modern-widget-lyric-line-long");
-      }
       if (line.index === activeLineIndex) {
         el.classList.add("active");
       } else if (activeLineIndex >= 0) {

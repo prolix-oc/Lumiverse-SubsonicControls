@@ -948,6 +948,7 @@ var SPOTIFY_WIDGET_CSS = `
 .spotify-modern-widget-lyrics-track {
   width: 100%;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   padding: 0 0 2px;
 }
@@ -964,6 +965,10 @@ var SPOTIFY_WIDGET_CSS = `
 }
 
 .spotify-modern-widget-lyric-line {
+  /* Reserve room before wrapping for the active line's 1.035 scale. */
+  width: calc(96% - 12px);
+  min-width: 0;
+  margin-inline: auto;
   text-align: center;
   font-size: 16px;
   line-height: 1.24;
@@ -971,6 +976,7 @@ var SPOTIFY_WIDGET_CSS = `
   letter-spacing: -0.018em;
   color: rgba(255, 255, 255, 0.22);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   text-wrap: pretty;
   transition: color 220ms ease, transform 220ms ease, text-shadow 220ms ease;
 }
@@ -978,11 +984,6 @@ var SPOTIFY_WIDGET_CSS = `
 .spotify-modern-widget-lyric-line-enter {
   animation: spotify-lyrics-line-in 360ms cubic-bezier(0.18, 0.9, 0.22, 1) both;
   animation-delay: var(--spotify-modern-lyric-enter-delay, 0ms);
-}
-
-.spotify-modern-widget-lyric-line-long {
-  max-width: calc(100% - 24px);
-  margin-inline: auto;
 }
 
 .spotify-modern-widget-lyric-line.active {
@@ -4345,9 +4346,6 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
       const el = document.createElement("div");
       el.className = "spotify-modern-widget-lyric-line spotify-modern-widget-lyric-line-enter";
       el.style.setProperty("--spotify-modern-lyric-enter-delay", `${Math.min(renderIndex * 22, 110)}ms`);
-      if (shouldReserveScaleGutter(line.text)) {
-        el.classList.add("spotify-modern-widget-lyric-line-long");
-      }
       el.textContent = line.displayText;
       lyricsTrack.appendChild(el);
       return el;
@@ -4361,9 +4359,6 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
       if (!el)
         return;
       el.className = "spotify-modern-widget-lyric-line";
-      if (shouldReserveScaleGutter(line.text)) {
-        el.classList.add("spotify-modern-widget-lyric-line-long");
-      }
       if (line.index === activeLineIndex) {
         el.classList.add("active");
       } else if (activeLineIndex >= 0) {
