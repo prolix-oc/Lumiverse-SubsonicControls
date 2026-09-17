@@ -1849,8 +1849,9 @@ export const SPOTIFY_WIDGET_CSS = `
 /* Apple Music-esque lyric motion. Focus always moves forward: the leaving line
    contracts on a short, prompt ease-out while the arriving line springs up
    behind it, so a sung line never lingers at full size beside its successor.
-   Every property within one direction shares a clock, which stops the depth
-   blur from finishing ahead of the scale it belongs to. */
+   Only compositor-friendly properties move: opacity and transform animate,
+   while the depth blur is a static per-tier value that never re-rasterizes
+   mid-transition. */
 .spotify-lyrics-line {
   --spotify-lyrics-line-opacity: 1;
   display: block;
@@ -1864,7 +1865,6 @@ export const SPOTIFY_WIDGET_CSS = `
   border-radius: 10px;
   cursor: pointer;
   transition:
-    color 320ms cubic-bezier(0.25, 0.7, 0.5, 1),
     opacity 320ms cubic-bezier(0.25, 0.7, 0.5, 1),
     background 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -1881,11 +1881,7 @@ export const SPOTIFY_WIDGET_CSS = `
   letter-spacing: -0.015em;
   transform: translateY(0) scale(0.955);
   transform-origin: center center;
-  filter: blur(0px);
-  transition:
-    transform 320ms cubic-bezier(0.25, 0.7, 0.5, 1),
-    filter 320ms cubic-bezier(0.25, 0.7, 0.5, 1),
-    text-shadow 240ms cubic-bezier(0.25, 0.7, 0.5, 1);
+  transition: transform 320ms cubic-bezier(0.25, 0.7, 0.5, 1);
 }
 
 .spotify-lyrics-line-text-long {
@@ -1907,20 +1903,17 @@ export const SPOTIFY_WIDGET_CSS = `
   color: var(--lumiverse-text);
   opacity: 1;
   transition:
-    color 520ms cubic-bezier(0.25, 0.7, 0.5, 1),
     opacity 520ms cubic-bezier(0.25, 0.7, 0.5, 1),
     background 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* Only the arriving scale springs. Blur has no negative range, so an
-   overshooting curve would clamp it at sharp well before the line settles. */
+/* Only the arriving scale springs. Nothing that transforms carries a filter or
+   a paint-invalidating property, so the compositor never has to re-rasterize a
+   blurred layer mid-scale. */
 .spotify-lyrics-line-active .spotify-lyrics-line-text {
   transform: translateY(0) scale(1.17);
   text-shadow: 0 0 20px rgba(255, 255, 255, 0.14);
-  transition:
-    transform 520ms cubic-bezier(0.34, 1.5, 0.5, 1),
-    filter 520ms cubic-bezier(0.25, 0.7, 0.5, 1),
-    text-shadow 400ms cubic-bezier(0.25, 0.7, 0.5, 1);
+  transition: transform 520ms cubic-bezier(0.34, 1.5, 0.5, 1);
 }
 
 .spotify-lyrics-line-tier-1 {
@@ -1969,23 +1962,20 @@ export const SPOTIFY_WIDGET_CSS = `
   --spotify-lyrics-line-opacity: 0.24;
 }
 
-/* Depth blur steps stay at or above half a pixel. Sub-pixel radii are
-   quantized by the rasterizer, so animating between them reads as an abrupt
-   pop instead of a gradual fall-off. */
-.spotify-lyrics-line-tier-1 .spotify-lyrics-line-text {
-  filter: blur(0.5px);
-}
-
+/* Depth blur is static and sits only on receding lines, never on the active or
+   adjacent line. A blur that animates, or that shares an element with a
+   transform, forces the compositor to re-rasterize that layer every frame and
+   leaves the text visibly soft mid-scale. */
 .spotify-lyrics-line-tier-2 .spotify-lyrics-line-text {
-  filter: blur(1.1px);
+  filter: blur(0.8px);
 }
 
 .spotify-lyrics-line-tier-3 .spotify-lyrics-line-text {
-  filter: blur(1.7px);
+  filter: blur(1.5px);
 }
 
 .spotify-lyrics-line-tier-4 .spotify-lyrics-line-text {
-  filter: blur(2.4px);
+  filter: blur(2.2px);
 }
 
 .spotify-lyrics-line-blank {
