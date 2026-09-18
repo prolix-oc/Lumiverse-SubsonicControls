@@ -2845,6 +2845,8 @@ function createLyricAutoScroller(container) {
   container.addEventListener("touchmove", noteUserScroll, { passive: true });
   container.addEventListener("pointerdown", noteUserScroll, { passive: true });
   function handleScroll() {
+    if (frame !== null || target !== null)
+      return;
     if (expected !== null && Math.abs(container.scrollTop - expected) <= 1)
       return;
     noteUserScroll();
@@ -4411,6 +4413,12 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
   });
   marqueeObserver.observe(meta);
   marqueeObserver.observe(root);
+  const lyricsResizeObserver = new ResizeObserver(() => {
+    if (!isExpandedState)
+      return;
+    centerActiveLyricLine(true);
+  });
+  lyricsResizeObserver.observe(lyricsBody);
   function refreshMarquees(restart) {
     requestAnimationFrame(() => {
       trackName.refresh(isExpandedState, restart);
@@ -4462,6 +4470,14 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
       return el;
     });
   }
+  function centerActiveLyricLine(force = false) {
+    if (!syncedLyricsModel.hasLyrics())
+      return;
+    const activeLineIndex = syncedLyricsModel.getActiveLineIndex();
+    const activeEl = activeLineIndex >= 0 ? syncedLyricEls[activeLineIndex] : syncedLyricEls[0];
+    if (activeEl)
+      autoScroll.center(activeEl, { force });
+  }
   function updateSyncedLyricsPresentation(shouldAutoscroll = true) {
     const activeLineIndex = syncedLyricsModel.getActiveLineIndex();
     const indexedLines = syncedLyricsModel.getIndexedLines();
@@ -4484,10 +4500,9 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
         el.classList.add("far");
       }
     });
-    const activeEl = activeLineIndex >= 0 ? syncedLyricEls[activeLineIndex] : syncedLyricEls[0];
-    if (!activeEl || !shouldAutoscroll)
+    if (!shouldAutoscroll)
       return;
-    autoScroll.center(activeEl);
+    centerActiveLyricLine();
   }
   function renderLyrics() {
     clearLyricsTrack();
@@ -4771,6 +4786,9 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
       isExpandedState = expandedValue;
       root.dataset.expanded = String(expandedValue);
       scheduleMarqueeRefresh(true);
+      if (expandedValue) {
+        requestAnimationFrame(() => centerActiveLyricLine(true));
+      }
     },
     isExpanded() {
       return isExpandedState;
@@ -4785,6 +4803,7 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
       if (marqueeRefreshTimerLate)
         clearTimeout(marqueeRefreshTimerLate);
       marqueeObserver.disconnect();
+      lyricsResizeObserver.disconnect();
       compactArt.destroy();
       heroArt.destroy();
       root.remove();

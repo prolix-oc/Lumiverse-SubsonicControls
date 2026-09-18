@@ -113,8 +113,12 @@ export function createLyricAutoScroller(container: HTMLElement): LyricAutoScroll
   container.addEventListener("pointerdown", noteUserScroll, { passive: true });
   // Scrollbar drags and momentum arrive without a pointer event on the content,
   // so anything that moved the track away from our own last write counts as the
-  // user taking over.
+  // user taking over. Ignore scroll events while a glide is active: resizing a
+  // native pop-out can clamp scrollTop and emit a scroll event even though the
+  // user did not touch the lyric viewport. Real wheel/touch/pointer input is
+  // handled above and cancels the glide before its scroll event arrives.
   function handleScroll() {
+    if (frame !== null || target !== null) return;
     if (expected !== null && Math.abs(container.scrollTop - expected) <= 1) return;
     noteUserScroll();
   }

@@ -352,6 +352,15 @@ export function createModernWidgetPlayerUI(
   marqueeObserver.observe(meta);
   marqueeObserver.observe(root);
 
+  // A desktop pop-out starts at the compact widget size and then grows its
+  // native window. Re-center after each resulting lyric viewport resize so the
+  // active line is positioned using the final, visible geometry.
+  const lyricsResizeObserver = new ResizeObserver(() => {
+    if (!isExpandedState) return;
+    centerActiveLyricLine(true);
+  });
+  lyricsResizeObserver.observe(lyricsBody);
+
   function refreshMarquees(restart: boolean) {
     requestAnimationFrame(() => {
       trackName.refresh(isExpandedState, restart);
@@ -408,6 +417,13 @@ export function createModernWidgetPlayerUI(
     });
   }
 
+  function centerActiveLyricLine(force = false) {
+    if (!syncedLyricsModel.hasLyrics()) return;
+    const activeLineIndex = syncedLyricsModel.getActiveLineIndex();
+    const activeEl = activeLineIndex >= 0 ? syncedLyricEls[activeLineIndex] : syncedLyricEls[0];
+    if (activeEl) autoScroll.center(activeEl, { force });
+  }
+
   function updateSyncedLyricsPresentation(shouldAutoscroll = true) {
     const activeLineIndex = syncedLyricsModel.getActiveLineIndex();
     const indexedLines = syncedLyricsModel.getIndexedLines();
@@ -427,12 +443,11 @@ export function createModernWidgetPlayerUI(
       }
     });
 
-    const activeEl = activeLineIndex >= 0 ? syncedLyricEls[activeLineIndex] : syncedLyricEls[0];
-    if (!activeEl || !shouldAutoscroll) return;
+    if (!shouldAutoscroll) return;
 
     // A suspended scroller covers the open context menu case: scrolling would
     // dismiss the menu, so the scroller stays parked until it closes.
-    autoScroll.center(activeEl);
+    centerActiveLyricLine();
   }
 
   function renderLyrics() {
@@ -743,6 +758,9 @@ export function createModernWidgetPlayerUI(
       isExpandedState = expandedValue;
       root.dataset.expanded = String(expandedValue);
       scheduleMarqueeRefresh(true);
+      if (expandedValue) {
+        requestAnimationFrame(() => centerActiveLyricLine(true));
+      }
     },
     isExpanded() {
       return isExpandedState;
@@ -755,6 +773,7 @@ export function createModernWidgetPlayerUI(
       if (marqueeRefreshTimer) clearTimeout(marqueeRefreshTimer);
       if (marqueeRefreshTimerLate) clearTimeout(marqueeRefreshTimerLate);
       marqueeObserver.disconnect();
+      lyricsResizeObserver.disconnect();
       compactArt.destroy();
       heroArt.destroy();
       root.remove();
