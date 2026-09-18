@@ -10,6 +10,7 @@ import { createMiniPlayerUI } from "./ui/mini-player";
 import { createModernWidgetPlayerUI } from "./ui/modern-widget-player";
 import { createCrossfadeArt, getTrackScopedArtUrl } from "./ui/crossfade-art";
 import { createSongBadgeManager } from "./ui/song-badge";
+import { getModernWidgetExpandedSize } from "./ui/modern-widget-layout";
 
 const NOTE_ICON = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>`;
 const WIDGET_EDGE_PAD = 12;
@@ -17,6 +18,8 @@ const WIDGET_PREFS_KEY = "subsonic-controls-widget-prefs";
 
 export function setup(ctx: SpindleFrontendContext) {
   const cleanups: Array<() => void> = [];
+  const isDesktopWidgetPopout = "__TAURI_INTERNALS__" in window
+    && new URLSearchParams(window.location.search).has("desktopWidgetExtension");
   // The Subsonic UI intentionally uses the same drawer design system as the
   // companion Spotify extension. This stylesheet includes both the tab and
   // shared floating-player styles.
@@ -414,15 +417,12 @@ export function setup(ctx: SpindleFrontendContext) {
   miniPlayer.setStyle("default");
 
   function getModernExpandedSize() {
-    if (!currentState) {
-      return { width: Math.max(280, Math.min(320, window.innerWidth - 24)), height: 196 };
-    }
-    // Keep the modern player compact enough for the original floating-widget
-    // footprint while still leaving room for the lyric animation viewport.
-    return {
-      width: Math.max(300, Math.min(348, window.innerWidth - 24)),
-      height: Math.max(420, Math.min(520, window.innerHeight - 24)),
-    };
+    return getModernWidgetExpandedSize({
+      desktopPopout: isDesktopWidgetPopout,
+      hasPlayback: Boolean(currentState),
+      viewportHeight: window.innerHeight,
+      viewportWidth: window.innerWidth,
+    });
   }
 
   function getWidgetLayoutSize(expanded = modernWidgetExpanded) {

@@ -2944,9 +2944,9 @@ function createSyncedLyricsModel(maxLines) {
   }
   function refreshActiveLineIndex() {
     if (lyrics.length === 0) {
-      const changed2 = activeLineIndex !== -1;
+      const changed = activeLineIndex !== -1;
       activeLineIndex = -1;
-      return changed2;
+      return changed;
     }
     const progressMs = getProgressMs();
     let nextActiveLineIndex = -1;
@@ -4493,26 +4493,26 @@ function createModernWidgetPlayerUI(sendToBackend, onExpandClick, onCollapseClic
     clearLyricsTrack();
     if (!connected || !state) {
       lastRenderedLyricSignature = "";
-      const status2 = document.createElement("div");
-      status2.className = "spotify-modern-widget-lyrics-status";
-      status2.textContent = connected ? "Start playback to see lyrics" : "Connect Subsonic to see lyrics";
-      lyricsTrack.appendChild(status2);
+      const status = document.createElement("div");
+      status.className = "spotify-modern-widget-lyrics-status";
+      status.textContent = connected ? "Start playback to see lyrics" : "Connect Subsonic to see lyrics";
+      lyricsTrack.appendChild(status);
       return;
     }
     if (lyricsLoading) {
       lastRenderedLyricSignature = "loading";
-      const status2 = document.createElement("div");
-      status2.className = "spotify-modern-widget-lyrics-status spotify-modern-widget-lyrics-status-loading";
-      status2.textContent = "Loading lyrics...";
-      lyricsTrack.appendChild(status2);
+      const status = document.createElement("div");
+      status.className = "spotify-modern-widget-lyrics-status spotify-modern-widget-lyrics-status-loading";
+      status.textContent = "Loading lyrics...";
+      lyricsTrack.appendChild(status);
       return;
     }
     if (lyricsInstrumental) {
       lastRenderedLyricSignature = "instrumental";
-      const status2 = document.createElement("div");
-      status2.className = "spotify-modern-widget-lyrics-status";
-      status2.textContent = "♪ Instrumental";
-      lyricsTrack.appendChild(status2);
+      const status = document.createElement("div");
+      status.className = "spotify-modern-widget-lyrics-status";
+      status.textContent = "♪ Instrumental";
+      lyricsTrack.appendChild(status);
       return;
     }
     if (syncedLyricsModel.hasLyrics() && state.trackUri === lyricsTrackUri) {
@@ -5075,12 +5075,40 @@ function createSongBadgeManager(ctx, sendToBackend) {
   return { setChatSongs, setMessageSong, decorate, decorateMounted, setActiveSwipe, removeMessage, reset, destroy };
 }
 
+// src/ui/modern-widget-layout.ts
+var VIEWPORT_PADDING = 24;
+var EMPTY_SIZE = { width: 320, height: 196 };
+var PLAYBACK_SIZE = { width: 348, height: 520 };
+var EMPTY_MIN_WIDTH = 280;
+var PLAYBACK_MIN_SIZE = { width: 300, height: 420 };
+function getModernWidgetExpandedSize({
+  desktopPopout,
+  hasPlayback,
+  viewportHeight,
+  viewportWidth
+}) {
+  const preferred = hasPlayback ? PLAYBACK_SIZE : EMPTY_SIZE;
+  if (desktopPopout)
+    return { ...preferred };
+  if (!hasPlayback) {
+    return {
+      width: Math.max(EMPTY_MIN_WIDTH, Math.min(preferred.width, viewportWidth - VIEWPORT_PADDING)),
+      height: preferred.height
+    };
+  }
+  return {
+    width: Math.max(PLAYBACK_MIN_SIZE.width, Math.min(preferred.width, viewportWidth - VIEWPORT_PADDING)),
+    height: Math.max(PLAYBACK_MIN_SIZE.height, Math.min(preferred.height, viewportHeight - VIEWPORT_PADDING))
+  };
+}
+
 // src/frontend.ts
 var NOTE_ICON = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>`;
 var WIDGET_EDGE_PAD = 12;
 var WIDGET_PREFS_KEY = "subsonic-controls-widget-prefs";
 function setup(ctx) {
   const cleanups = [];
+  const isDesktopWidgetPopout = "__TAURI_INTERNALS__" in window && new URLSearchParams(window.location.search).has("desktopWidgetExtension");
   cleanups.push(ctx.dom.addStyle(SPOTIFY_WIDGET_CSS));
   const send = (message) => ctx.sendToBackend(message);
   let lastThemeArtUrl = null;
@@ -5451,13 +5479,12 @@ function setup(ctx) {
   });
   miniPlayer.setStyle("default");
   function getModernExpandedSize() {
-    if (!currentState) {
-      return { width: Math.max(280, Math.min(320, window.innerWidth - 24)), height: 196 };
-    }
-    return {
-      width: Math.max(300, Math.min(348, window.innerWidth - 24)),
-      height: Math.max(420, Math.min(520, window.innerHeight - 24))
-    };
+    return getModernWidgetExpandedSize({
+      desktopPopout: isDesktopWidgetPopout,
+      hasPlayback: Boolean(currentState),
+      viewportHeight: window.innerHeight,
+      viewportWidth: window.innerWidth
+    });
   }
   function getWidgetLayoutSize(expanded = modernWidgetExpanded) {
     if (currentMiniPlayerStyle === "modern") {
