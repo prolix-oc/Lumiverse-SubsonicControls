@@ -1,6 +1,6 @@
 {
   "identifier": "subsonic_controls",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "name": "Subsonic Controls",
   "author": "Prolix OCs",
   "github": "",
@@ -9,5 +9,6 @@
   "permissions": ["cors_proxy", "ui_panels", "app_manipulation", "generation", "chat_mutation"],
   "entry_backend": "dist/backend.js",
   "entry_frontend": "dist/frontend.js",
+  "entry_frontend_widget": "dist/widget.js",
   "minimum_lumiverse_version": "1.0.0"
 }
