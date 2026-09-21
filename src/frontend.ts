@@ -844,10 +844,11 @@ export function setup(ctx: SpindleFrontendContext) {
               : albumPaletteCache.get(artworkKey || "");
             if (artworkKey && restoredPalette) {
               rememberAlbumPalette(artworkKey, restoredPalette);
-              // The backend has already restored a durable palette before it
-              // sent this state. A local cache entry is sent only when it was
-              // not included in that response.
-              if (!restoredFromBackend) send({ type: "album_colors", colors: restoredPalette, artworkKey });
+              // A frontend reload starts with no host-side theme override in
+              // its store. Re-submit a restored palette once for this art URL
+              // so the backend emits a fresh host UI update. The backend
+              // still deduplicates its per-second state restoration path.
+              send({ type: "album_colors", colors: restoredPalette, artworkKey });
             } else {
               const applySeq = ++themeApplySeq;
               void extractColorsFromImage(artUrl).then((colors) => {

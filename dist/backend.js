@@ -917,8 +917,6 @@ async function updateTheme(colors, userId, artworkKey) {
     if (config && artworkKey) {
       await saveAlbumPalette(config, artworkKey, colors, userId);
       const key = paletteKey(config, artworkKey);
-      if (activeAlbumPaletteKeys.get(userId) === key)
-        return;
       await spindle.theme.applyPalette({ accent: colors.dominantHsl }, userId);
       activeAlbumPaletteKeys.set(userId, key);
       return;
