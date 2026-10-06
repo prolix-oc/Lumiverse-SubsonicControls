@@ -387,7 +387,7 @@ export function setup(ctx: SpindleFrontendContext) {
     toggle.append(checkbox, toggleLabel);
     const hint = document.createElement("div");
     hint.style.cssText = "font-size:0.8em;opacity:0.65;margin-top:4px";
-    hint.textContent = "Depth-blurs receding lyric lines and fades new lines in through a blur. Turn off for crisp text.";
+    hint.textContent = "Softens distant synced lyrics. Turn off for crisp text.";
     const field = document.createElement("div");
     field.append(toggle, hint);
     checkbox.addEventListener("change", () => {

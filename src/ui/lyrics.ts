@@ -16,7 +16,7 @@ export interface LyricsUI {
   updatePlayback(state: PlaybackState | null): void;
   setLoading(loading: boolean, playbackState?: PlaybackState | null): void;
   setAutoScrollSuspended(suspended: boolean): void;
-  /** Turns the receding-line depth blur and the blur-in animation on or off. */
+  /** Turns the receding-line depth blur on or off. */
   setBlurEnabled(enabled: boolean): void;
   clear(): void;
   destroy(): void;
@@ -90,10 +90,6 @@ export function createLyricsUI(playbackClock: PlaybackClock = createPlaybackCloc
     syncedLines.forEach((line) => {
       line.el.className = getLineClassName(line.index, activeLineIndex, line.hasText, blurEnabled);
     });
-  }
-  function applyEnterBlur() {
-    if (blurEnabled) root.style.removeProperty("--spotify-lyrics-enter-blur");
-    else root.style.setProperty("--spotify-lyrics-enter-blur", "0px");
   }
   function updateLineClasses(nextActiveLineIndex: number, forceCenter = false) {
     const previousIndex = activeLineIndex;
@@ -254,7 +250,6 @@ export function createLyricsUI(playbackClock: PlaybackClock = createPlaybackCloc
     setBlurEnabled(enabled: boolean) {
       if (blurEnabled === enabled) return;
       blurEnabled = enabled;
-      applyEnterBlur();
       refreshLineClasses();
     },
     clear,

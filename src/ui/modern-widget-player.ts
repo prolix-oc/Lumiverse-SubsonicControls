@@ -259,6 +259,7 @@ export function createModernWidgetPlayerUI(
 
   const lyricsSection = document.createElement("div");
   lyricsSection.className = "spotify-modern-widget-lyrics";
+  lyricsSection.dataset.blur = "true";
   const lyricsHeader = document.createElement("div");
   lyricsHeader.className = "spotify-modern-widget-section-label";
   lyricsHeader.textContent = "Lyrics";
@@ -761,10 +762,7 @@ export function createModernWidgetPlayerUI(
     updateLyrics,
     setLyricsLoading,
     setLyricsBlur(enabled: boolean) {
-      // The lyric lines of this player are re-colored per tier but never
-      // depth-blurred, so the setting only drives their blur-in animation.
-      if (enabled) lyricsSection.style.removeProperty("--spotify-lyrics-enter-blur");
-      else lyricsSection.style.setProperty("--spotify-lyrics-enter-blur", "0px");
+      lyricsSection.dataset.blur = String(enabled);
     },
     setAutoScrollSuspended(suspended: boolean) {
       if (suspended) lineMotion.cancel();

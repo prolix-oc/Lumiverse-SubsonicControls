@@ -1046,6 +1046,21 @@ export const SPOTIFY_WIDGET_CSS = `
   color: rgba(255, 255, 255, 0.52);
 }
 
+/* A blurred text shadow gives distant rows depth without a filtered layer.
+   WebKit can show the edges of that layer while its parent is transformed. */
+.spotify-modern-widget-lyrics[data-blur="true"] .spotify-modern-widget-lyric-line.mid .spotify-modern-widget-lyric-text,
+.spotify-modern-widget-lyrics[data-blur="true"] .spotify-modern-widget-lyric-line.far .spotify-modern-widget-lyric-text {
+  -webkit-text-fill-color: transparent;
+}
+
+.spotify-modern-widget-lyrics[data-blur="true"] .spotify-modern-widget-lyric-line.mid .spotify-modern-widget-lyric-text {
+  text-shadow: 0 0 0.6px currentColor;
+}
+
+.spotify-modern-widget-lyrics[data-blur="true"] .spotify-modern-widget-lyric-line.far .spotify-modern-widget-lyric-text {
+  text-shadow: 0 0 1.2px currentColor;
+}
+
 .spotify-modern-widget-controls {
   display: flex;
   align-items: center;
@@ -2017,18 +2032,35 @@ export const SPOTIFY_WIDGET_CSS = `
   --spotify-lyrics-line-opacity: 0.24;
 }
 
-/* Keep the active and adjacent lines sharp. More distant lines use a small,
-   static blur, omitted entirely when the Lyrics blur setting is disabled. */
+/* Keep the active and adjacent lines sharp. Paint distant text as a soft
+   shadow so scaling it does not create a WebKit filter layer. */
+.spotify-lyrics-line-blur-2 .spotify-lyrics-line-text,
+.spotify-lyrics-line-blur-3 .spotify-lyrics-line-text,
+.spotify-lyrics-line-blur-4 .spotify-lyrics-line-text {
+  -webkit-text-fill-color: transparent;
+}
+
 .spotify-lyrics-line-blur-2 .spotify-lyrics-line-text {
-  filter: blur(0.8px);
+  text-shadow: 0 0 0.8px currentColor;
 }
 
 .spotify-lyrics-line-blur-3 .spotify-lyrics-line-text {
-  filter: blur(1.5px);
+  text-shadow: 0 0 1.5px currentColor;
 }
 
 .spotify-lyrics-line-blur-4 .spotify-lyrics-line-text {
-  filter: blur(2.2px);
+  text-shadow: 0 0 2.2px currentColor;
+}
+
+@media (forced-colors: active), (prefers-contrast: more) {
+  .spotify-lyrics-line-blur-2 .spotify-lyrics-line-text,
+  .spotify-lyrics-line-blur-3 .spotify-lyrics-line-text,
+  .spotify-lyrics-line-blur-4 .spotify-lyrics-line-text,
+  .spotify-modern-widget-lyrics[data-blur="true"] .spotify-modern-widget-lyric-line.mid .spotify-modern-widget-lyric-text,
+  .spotify-modern-widget-lyrics[data-blur="true"] .spotify-modern-widget-lyric-line.far .spotify-modern-widget-lyric-text {
+    -webkit-text-fill-color: currentColor;
+    text-shadow: none;
+  }
 }
 
 .spotify-lyrics-line-blank {
@@ -2137,22 +2169,17 @@ export const SPOTIFY_WIDGET_CSS = `
   }
 }
 
-/* The blur-in radius is a variable so the Lyrics blur setting can zero it
-   without a second copy of the motion. A custom property inside @keyframes is
-   substituted when the animation starts, which is the only moment that
-   matters here: the element is created, and the setting read, before it is
-   inserted. */
+/* Fade and lift new rows without a filter animation. Even blur(0) keeps a
+   filtered backing layer after a forwards-filled animation has settled. */
 @keyframes spotify-lyrics-line-in {
   from {
     opacity: 0;
     transform: translateY(16px);
-    filter: blur(var(--spotify-lyrics-enter-blur, 8px));
   }
 
   to {
     opacity: var(--spotify-lyrics-line-opacity);
     transform: translateY(0);
-    filter: blur(0);
   }
 }
 
@@ -2160,13 +2187,11 @@ export const SPOTIFY_WIDGET_CSS = `
   from {
     opacity: 0;
     transform: translateY(10px);
-    filter: blur(var(--spotify-lyrics-enter-blur, 6px));
   }
 
   to {
     opacity: 1;
     transform: none;
-    filter: blur(0);
   }
 }
 
