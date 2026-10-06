@@ -1,15 +1,11 @@
+import { createPlaybackClock, type PlaybackClock, type PlaybackClockState } from "./playback-clock";
+
 export interface ParsedSyncedLyricLine {
   timeMs: number;
   text: string;
 }
 
-export interface SyncedLyricsPlayback {
-  trackUri: string;
-  progressMs: number;
-  durationMs: number;
-  isPlaying: boolean;
-  updatedAt: number;
-}
+export type SyncedLyricsPlayback = PlaybackClockState;
 
 export interface SyncedLyricsSnapshotLine extends ParsedSyncedLyricLine {
   index: number;
@@ -71,16 +67,10 @@ export function shouldReserveScaleGutter(text: string): boolean {
   return !text.includes("\n") && text.length >= 36;
 }
 
-export function createSyncedLyricsModel(maxLines?: number) {
+export function createSyncedLyricsModel(maxLines?: number, clock: PlaybackClock = createPlaybackClock()) {
   let lyrics: ParsedSyncedLyricLine[] = [];
-  let playback: SyncedLyricsPlayback | null = null;
+  let indexed: SyncedLyricsSnapshotLine[] = [];
   let activeLineIndex = -1;
-
-  function getProgressMs(): number {
-    if (!playback) return 0;
-    if (!playback.isPlaying) return playback.progressMs;
-    return Math.min(playback.progressMs + Date.now() - playback.updatedAt, playback.durationMs || Infinity);
-  }
 
   function refreshActiveLineIndex(): boolean {
     if (lyrics.length === 0) {
@@ -89,12 +79,15 @@ export function createSyncedLyricsModel(maxLines?: number) {
       return changed;
     }
 
-    const progressMs = getProgressMs();
-    let nextActiveLineIndex = -1;
-    for (let i = 0; i < lyrics.length; i++) {
-      if (lyrics[i].timeMs > progressMs) break;
-      nextActiveLineIndex = i;
+    const progressMs = clock.getProgressMs();
+    let low = 0;
+    let high = lyrics.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (lyrics[middle].timeMs <= progressMs) low = middle + 1;
+      else high = middle;
     }
+    const nextActiveLineIndex = low - 1;
 
     const changed = nextActiveLineIndex !== activeLineIndex;
     activeLineIndex = nextActiveLineIndex;
@@ -102,13 +95,6 @@ export function createSyncedLyricsModel(maxLines?: number) {
   }
 
   function getVisibleLines(): SyncedLyricsSnapshotLine[] {
-    const indexed = lyrics.map((line, index) => ({
-      ...line,
-      index,
-      displayText: getLineDisplayText(line.text),
-      hasText: Boolean(line.text),
-    }));
-
     if (!maxLines || indexed.length <= maxLines) return indexed;
     if (activeLineIndex < 0) return indexed.slice(0, maxLines);
 
@@ -117,27 +103,28 @@ export function createSyncedLyricsModel(maxLines?: number) {
   }
 
   function getIndexedLines(): SyncedLyricsSnapshotLine[] {
-    return lyrics.map((line, index) => ({
-      ...line,
-      index,
-      displayText: getLineDisplayText(line.text),
-      hasText: Boolean(line.text),
-    }));
+    return indexed;
+  }
+
+  function getTimeUntilNextLineMs() {
+    const end = lyrics[activeLineIndex + 1]?.timeMs ?? (clock.getDurationMs() || Infinity);
+    return Math.max(0, end - clock.getProgressMs());
   }
 
   return {
     clear() {
       lyrics = [];
-      playback = null;
+      indexed = [];
       activeLineIndex = -1;
     },
     setLyrics(nextLyrics: ParsedSyncedLyricLine[]) {
       lyrics = nextLyrics;
+      indexed = lyrics.map((line, index) => ({ ...line, index, displayText: getLineDisplayText(line.text), hasText: Boolean(line.text) }));
       activeLineIndex = -1;
       refreshActiveLineIndex();
     },
-    setPlayback(nextPlayback: SyncedLyricsPlayback | null) {
-      playback = nextPlayback;
+    setPlayback(nextPlayback: SyncedLyricsPlayback | null, options?: { seek?: boolean }) {
+      clock.update(nextPlayback, options);
     },
     refreshActiveLineIndex,
     getActiveLineIndex() {
@@ -147,6 +134,8 @@ export function createSyncedLyricsModel(maxLines?: number) {
       return lyrics.length > 0;
     },
     getIndexedLines,
+    getTimeUntilNextLineMs,
+    getActiveLine: () => indexed[activeLineIndex],
     getSnapshot(): SyncedLyricsSnapshot {
       refreshActiveLineIndex();
       return {
@@ -156,4 +145,3 @@ export function createSyncedLyricsModel(maxLines?: number) {
     },
   };
 }
-

@@ -1,5 +1,8 @@
 import type { PlaybackState } from "../types";
-import { createLyricAutoScroller } from "./lyric-auto-scroll";
+import { createLyricViewport } from "./lyric-viewport";
+import { createLyricLineMotion, type LyricMotionLine } from "./lyric-line-motion";
+import { createLyricGap, updateLyricGap } from "./lyric-gap";
+import { createPlaybackClock, type PlaybackClock } from "./playback-clock";
 import {
   createSyncedLyricsModel,
   getLineDisplayText,
@@ -19,18 +22,8 @@ export interface LyricsUI {
   destroy(): void;
 }
 
-interface SyncedLyricLine {
-  index: number;
-  el: HTMLDivElement;
-  textEl: HTMLDivElement;
-}
-
-interface LyricsPlayback {
-  trackUri: string;
-  progressMs: number;
-  durationMs: number;
-  isPlaying: boolean;
-  updatedAt: number;
+interface SyncedLyricLine extends LyricMotionLine {
+  hasText: boolean;
 }
 
 const LOADING_STATUS_DELAY_MS = 180;
@@ -55,7 +48,7 @@ function getLineClassName(index: number, activeLineIndex: number, hasText: boole
 }
 
 /** Shared synchronized lyric rendering and animation behavior from Spotify Controls. */
-export function createLyricsUI(): LyricsUI {
+export function createLyricsUI(playbackClock: PlaybackClock = createPlaybackClock()): LyricsUI {
   const root = document.createElement("div");
   root.className = "spotify-section spotify-lyrics-section";
   root.dataset.transport = "false";
@@ -68,12 +61,15 @@ export function createLyricsUI(): LyricsUI {
 
   let currentTrackUri: string | null = null;
   let syncedLines: SyncedLyricLine[] = [];
-  const syncedLyricsModel = createSyncedLyricsModel();
-  const autoScroll = createLyricAutoScroller(body);
-  let playback: LyricsPlayback | null = null;
+  const syncedLyricsModel = createSyncedLyricsModel(undefined, playbackClock);
+  const viewport = createLyricViewport(body, () => updateActiveLine(true));
+  root.appendChild(viewport.returnButton);
+  const autoScroll = viewport.autoScroll;
+  const lineMotion = createLyricLineMotion(body);
   let activeLineIndex = -1;
+  let presentedClockRevision = playbackClock.getRevision();
   let blurEnabled = true;
-  let tickTimer: ReturnType<typeof setInterval> | undefined;
+  let tickFrame: number | null = null;
   let loadingTimer: ReturnType<typeof setTimeout> | undefined;
 
   function supportsTransport(state: PlaybackState | null): boolean {
@@ -86,14 +82,13 @@ export function createLyricsUI(): LyricsUI {
     body.classList.remove("spotify-lyrics-loading");
   }
   function stopTicking() {
-    clearInterval(tickTimer);
-    tickTimer = undefined;
+    if (tickFrame !== null) cancelAnimationFrame(tickFrame);
+    tickFrame = null;
   }
 
   function refreshLineClasses() {
     syncedLines.forEach((line) => {
-      const snapshot = syncedLyricsModel.getIndexedLines()[line.index];
-      line.el.className = getLineClassName(line.index, activeLineIndex, snapshot?.hasText ?? false, blurEnabled);
+      line.el.className = getLineClassName(line.index, activeLineIndex, line.hasText, blurEnabled);
     });
   }
   function applyEnterBlur() {
@@ -101,34 +96,60 @@ export function createLyricsUI(): LyricsUI {
     else root.style.setProperty("--spotify-lyrics-enter-blur", "0px");
   }
   function updateLineClasses(nextActiveLineIndex: number, forceCenter = false) {
+    const previousIndex = activeLineIndex;
+    const discontinuity = presentedClockRevision !== playbackClock.getRevision();
+    presentedClockRevision = playbackClock.getRevision();
+    if (discontinuity) autoScroll.resume();
     activeLineIndex = nextActiveLineIndex;
+    const timing = lineMotion.setCadence(syncedLyricsModel.getTimeUntilNextLineMs());
     refreshLineClasses();
-    const active = syncedLines.find((line) => line.index === activeLineIndex);
-    if (active) autoScroll.center(active.textEl, { force: forceCenter });
+    const active = syncedLines[activeLineIndex >= 0 ? activeLineIndex : 0];
+    const gliding = active && autoScroll.center(active.anchorEl, { timeConstantMs: timing.scrollTimeConstantMs });
+    if (gliding && !discontinuity && !forceCenter && playbackClock.isPlaying() && previousIndex !== activeLineIndex) {
+      lineMotion.play(syncedLines, previousIndex, activeLineIndex);
+    } else if (discontinuity || forceCenter || previousIndex !== activeLineIndex) {
+      lineMotion.cancel();
+    }
   }
   function updateActiveLine(forceCenter = false) {
     if (!syncedLines.length) return;
     const changed = syncedLyricsModel.refreshActiveLineIndex();
-    if (changed || forceCenter) updateLineClasses(syncedLyricsModel.getActiveLineIndex(), forceCenter);
+    if (changed || forceCenter || presentedClockRevision !== playbackClock.getRevision()) updateLineClasses(syncedLyricsModel.getActiveLineIndex(), forceCenter);
+    updateLyricGap(body, syncedLyricsModel.getTimeUntilNextLineMs(), syncedLyricsModel.getActiveLine()?.hasText === false);
   }
   function startTicking() {
-    if (!tickTimer && syncedLines.length) tickTimer = setInterval(updateActiveLine, 200);
+    if (tickFrame === null && syncedLines.length) tickFrame = requestAnimationFrame(tick);
+  }
+  function tick() {
+    tickFrame = null;
+    updateActiveLine();
+    if (playbackClock.isPlaying()) startTicking();
+  }
+  function syncFromClock() {
+    const matchesTrack = playbackClock.getTrackUri() === currentTrackUri && currentTrackUri !== null;
+    body.dataset.playing = String(matchesTrack && playbackClock.isPlaying());
+    if (!matchesTrack) { stopTicking(); lineMotion.cancel(); return; }
+    updateActiveLine();
+    if (playbackClock.isPlaying()) startTicking(); else stopTicking();
   }
   function clear() {
-    stopTicking(); autoScroll.cancel(); stopLoadingState();
+    stopTicking(); autoScroll.cancel(); lineMotion.cancel(); stopLoadingState();
+    viewport.reset();
+    updateLyricGap(body, 0, false);
     body.innerHTML = "";
     body.className = "spotify-lyrics-body";
     currentTrackUri = null;
     syncedLines = [];
     syncedLyricsModel.clear();
-    playback = null;
     activeLineIndex = -1;
+    body.dataset.playing = "false";
     root.dataset.transport = "false";
   }
   function setLoading(loading: boolean, playbackState?: PlaybackState | null) {
     stopLoadingState();
     if (!loading) return;
-    stopTicking(); autoScroll.cancel();
+    stopTicking(); autoScroll.cancel(); lineMotion.cancel();
+    viewport.reset();
     body.innerHTML = "";
     body.className = "spotify-lyrics-body spotify-lyrics-loading";
     // Keep the same playback epoch as the floating player while the lyric
@@ -138,17 +159,7 @@ export function createLyricsUI(): LyricsUI {
     syncedLines = [];
     syncedLyricsModel.setLyrics([]);
     if (playbackState && playbackState.trackUri === currentTrackUri) {
-      playback = {
-        trackUri: playbackState.trackUri,
-        progressMs: playbackState.progressMs,
-        durationMs: playbackState.durationMs,
-        isPlaying: playbackState.isPlaying,
-        updatedAt: Date.now(),
-      };
-      syncedLyricsModel.setPlayback(playback);
-    } else {
-      playback = null;
-      syncedLyricsModel.setPlayback(null);
+      playbackClock.update(playbackState);
     }
     activeLineIndex = -1;
     loadingTimer = setTimeout(() => {
@@ -167,7 +178,10 @@ export function createLyricsUI(): LyricsUI {
     syncedLyricsModel.setLyrics(lines);
     const snapshot = syncedLyricsModel.getSnapshot();
     activeLineIndex = snapshot.activeLineIndex;
+    presentedClockRevision = playbackClock.getRevision();
     syncedLines = snapshot.lines.map((line, renderIndex) => {
+      const anchorEl = document.createElement("div");
+      anchorEl.className = "spotify-lyric-line-anchor";
       const el = document.createElement("div");
       const textEl = document.createElement("div");
       el.className = getLineClassName(line.index, activeLineIndex, line.hasText, blurEnabled);
@@ -176,13 +190,17 @@ export function createLyricsUI(): LyricsUI {
       textEl.className = "spotify-lyrics-line-text";
       if (!line.hasText) textEl.classList.add("spotify-lyrics-line-symbol");
       if (shouldReserveScaleGutter(line.text)) textEl.classList.add("spotify-lyrics-line-text-long");
-      textEl.textContent = getLineDisplayText(line.text);
+      if (line.hasText) textEl.textContent = getLineDisplayText(line.text);
+      else textEl.appendChild(createLyricGap());
       el.appendChild(textEl);
-      body.appendChild(el);
-      return { index: line.index, el, textEl };
+      anchorEl.appendChild(el);
+      body.appendChild(anchorEl);
+      return { index: line.index, hasText: line.hasText, anchorEl, el };
     });
-    updateActiveLine();
-    if (playback?.isPlaying) startTicking();
+    viewport.setLines(syncedLines.map((line) => line.anchorEl));
+    const active = syncedLines[activeLineIndex >= 0 ? activeLineIndex : 0];
+    if (active) autoScroll.center(active.anchorEl);
+    syncFromClock();
     return true;
   }
   function renderPlainLyrics(value: string) {
@@ -194,10 +212,12 @@ export function createLyricsUI(): LyricsUI {
     body.appendChild(text);
   }
   function update(trackUri: string | null, plainLyrics: string | null, syncedLyrics: string | null, instrumental: boolean) {
-    stopTicking(); autoScroll.cancel(); stopLoadingState();
+    stopTicking(); autoScroll.cancel(); lineMotion.cancel(); stopLoadingState();
+    viewport.reset();
     currentTrackUri = trackUri;
     body.innerHTML = "";
     syncedLines = [];
+    syncedLyricsModel.clear();
     activeLineIndex = -1;
     if (instrumental) {
       body.className = "spotify-lyrics-body";
@@ -214,25 +234,19 @@ export function createLyricsUI(): LyricsUI {
     const nextTransportState = String(supportsTransport(state));
     const transportChanged = root.dataset.transport !== nextTransportState;
     root.dataset.transport = nextTransportState;
-    if (!state || state.trackUri !== currentTrackUri) {
-      playback = null;
-      syncedLyricsModel.setPlayback(null);
-      stopTicking();
-      return;
-    }
-    playback = { trackUri: state.trackUri, progressMs: state.progressMs, durationMs: state.durationMs, isPlaying: state.isPlaying, updatedAt: Date.now() };
-    syncedLyricsModel.setPlayback(playback);
-    updateActiveLine();
-    if (state.isPlaying) startTicking(); else stopTicking();
+    playbackClock.update(state);
+    syncFromClock();
     if (transportChanged && syncedLines.length) {
       // The read-only layout has a larger lyric viewport. Re-center after it
       // has been applied so the active-line transition stays at its midpoint.
       requestAnimationFrame(() => updateActiveLine(true));
     }
   }
+  const unsubscribeClock = playbackClock.subscribe(syncFromClock);
   return {
     root, update, updatePlayback, setLoading,
     setAutoScrollSuspended(suspended) {
+      if (suspended) lineMotion.cancel();
       if (autoScroll.suspend(suspended) && !suspended && syncedLines.length) {
         updateLineClasses(activeLineIndex, true);
       }
@@ -244,6 +258,6 @@ export function createLyricsUI(): LyricsUI {
       refreshLineClasses();
     },
     clear,
-    destroy() { stopTicking(); autoScroll.destroy(); stopLoadingState(); root.remove(); },
+    destroy() { unsubscribeClock(); stopTicking(); viewport.destroy(); lineMotion.destroy(); stopLoadingState(); root.remove(); },
   };
 }

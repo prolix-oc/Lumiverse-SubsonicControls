@@ -927,6 +927,7 @@ export const SPOTIFY_WIDGET_CSS = `
 }
 
 .spotify-modern-widget-lyrics {
+  position: relative;
   display: grid;
   gap: 8px;
   min-height: 0;
@@ -948,8 +949,9 @@ export const SPOTIFY_WIDGET_CSS = `
   overflow-x: hidden;
   position: relative;
   box-sizing: border-box;
-  padding-top: 16px;
-  padding-bottom: 16px;
+  padding-top: var(--spotify-lyrics-leading-space, 16px);
+  padding-bottom: var(--spotify-lyrics-trailing-space, 16px);
+  overflow-anchor: none;
   scroll-padding-top: 36%;
   scroll-padding-bottom: 24px;
   overscroll-behavior: contain;
@@ -981,8 +983,8 @@ export const SPOTIFY_WIDGET_CSS = `
 }
 
 .spotify-modern-widget-lyric-line {
-  /* Reserve room before wrapping for the active line's 1.035 scale. */
-  width: calc(96% - 12px);
+  /* Reserve room before wrapping for the active text's 1.065 scale. */
+  width: calc(93% - 12px);
   min-width: 0;
   margin-inline: auto;
   text-align: center;
@@ -994,7 +996,13 @@ export const SPOTIFY_WIDGET_CSS = `
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   text-wrap: pretty;
-  transition: color 220ms ease, transform 220ms ease, text-shadow 220ms ease;
+  transition: color var(--spotify-lyric-release-ms, 180ms) ease;
+}
+
+.spotify-modern-widget-lyric-text {
+  transform: scale(0.985);
+  transform-origin: center center;
+  transition: transform var(--spotify-lyric-release-ms, 180ms) cubic-bezier(0.25, 0.7, 0.5, 1);
 }
 
 .spotify-modern-widget-lyric-line-enter {
@@ -1004,8 +1012,13 @@ export const SPOTIFY_WIDGET_CSS = `
 
 .spotify-modern-widget-lyric-line.active {
   color: #fff;
-  transform: scale(1.035);
+  transition: color var(--spotify-lyric-highlight-ms, 140ms) ease;
+}
+
+.spotify-modern-widget-lyric-line.active .spotify-modern-widget-lyric-text {
+  transform: scale(1.065);
   text-shadow: 0 0 16px rgba(255, 255, 255, 0.12);
+  transition: transform var(--spotify-lyric-arrival-ms, 380ms) cubic-bezier(0.34, 1.18, 0.5, 1);
 }
 
 .spotify-modern-widget-lyric-line.near {
@@ -1014,6 +1027,14 @@ export const SPOTIFY_WIDGET_CSS = `
 
 .spotify-modern-widget-lyric-line.mid {
   color: rgba(255, 255, 255, 0.38);
+}
+
+.spotify-modern-widget-lyric-line.past.near {
+  color: rgba(255, 255, 255, 0.46);
+}
+
+.spotify-modern-widget-lyric-line.past.mid {
+  color: rgba(255, 255, 255, 0.28);
 }
 
 .spotify-modern-widget-lyric-line.far,
@@ -1795,6 +1816,7 @@ export const SPOTIFY_WIDGET_CSS = `
 
 /* Lyrics */
 .spotify-lyrics-section {
+  position: relative;
   min-height: 0;
   flex: 1 1 auto;
   overflow: hidden;
@@ -1815,8 +1837,9 @@ export const SPOTIFY_WIDGET_CSS = `
   scrollbar-width: thin;
   scrollbar-color: var(--lumiverse-fill-strong) transparent;
   position: relative;
-  padding-top: 28px;
-  padding-bottom: 112px;
+  padding-top: var(--spotify-lyrics-leading-space, 28px);
+  padding-bottom: var(--spotify-lyrics-trailing-space, 112px);
+  overflow-anchor: none;
   padding-inline: 6px;
   scroll-padding-top: 34%;
   scroll-padding-bottom: 112px;
@@ -1829,7 +1852,7 @@ export const SPOTIFY_WIDGET_CSS = `
    that was reserved for them. Its re-centered active line now uses the full
    read-only lyric viewport. */
 .spotify-lyrics-section[data-transport="false"] .spotify-lyrics-has-content {
-  padding-bottom: 36px;
+  padding-bottom: var(--spotify-lyrics-trailing-space, 36px);
   scroll-padding-bottom: 36px;
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 40px, black calc(100% - 32px), transparent 100%);
   mask-image: linear-gradient(to bottom, transparent 0, black 40px, black calc(100% - 32px), transparent 100%);
@@ -1859,15 +1882,19 @@ export const SPOTIFY_WIDGET_CSS = `
 }
 
 .spotify-lyrics-synced {
-  gap: 2px;
+  gap: 5px;
 }
 
-/* Apple Music-esque lyric motion. Focus always moves forward: the leaving line
-   contracts on a short, prompt ease-out while the arriving line springs up
-   behind it, so a sung line never lingers at full size beside its successor.
-   Only compositor-friendly properties move: opacity and transform animate,
-   while the depth blur is a static per-tier value that never re-rasterizes
-   mid-transition. */
+/* Both lyric views center these fixed anchors. Inner rows carry the trailing
+   wave and their text carries the scale, so neither can move the scroll goal. */
+.spotify-lyric-line-anchor {
+  width: 100%;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+/* The arriving line gains emphasis promptly and settles gently; the sung line
+   releases it sooner. Depth blur remains a static per-tier value. */
 .spotify-lyrics-line {
   --spotify-lyrics-line-opacity: 1;
   display: block;
@@ -1881,7 +1908,8 @@ export const SPOTIFY_WIDGET_CSS = `
   border-radius: 10px;
   cursor: pointer;
   transition:
-    opacity 320ms cubic-bezier(0.25, 0.7, 0.5, 1),
+    opacity var(--spotify-lyric-release-ms, 190ms) cubic-bezier(0.25, 0.7, 0.5, 1),
+    color var(--spotify-lyric-release-ms, 190ms) ease,
     background 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -1895,9 +1923,9 @@ export const SPOTIFY_WIDGET_CSS = `
   word-break: normal;
   text-wrap: pretty;
   letter-spacing: -0.015em;
-  transform: translateY(0) scale(0.955);
+  transform: scale(0.97);
   transform-origin: center center;
-  transition: transform 320ms cubic-bezier(0.25, 0.7, 0.5, 1);
+  transition: transform var(--spotify-lyric-release-ms, 190ms) cubic-bezier(0.25, 0.7, 0.5, 1);
 }
 
 .spotify-lyrics-line-text-long {
@@ -1919,17 +1947,16 @@ export const SPOTIFY_WIDGET_CSS = `
   color: var(--lumiverse-text);
   opacity: 1;
   transition:
-    opacity 520ms cubic-bezier(0.25, 0.7, 0.5, 1),
+    opacity var(--spotify-lyric-highlight-ms, 140ms) ease-out,
+    color var(--spotify-lyric-highlight-ms, 140ms) ease-out,
     background 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* Only the arriving scale springs. Nothing that transforms carries a filter or
-   a paint-invalidating property, so the compositor never has to re-rasterize a
-   blurred layer mid-scale. */
+/* Scale is separate from the row's translation and the fixed layout anchor. */
 .spotify-lyrics-line-active .spotify-lyrics-line-text {
-  transform: translateY(0) scale(1.17);
+  transform: scale(1.14);
   text-shadow: 0 0 20px rgba(255, 255, 255, 0.14);
-  transition: transform 520ms cubic-bezier(0.34, 1.5, 0.5, 1);
+  transition: transform var(--spotify-lyric-arrival-ms, 380ms) cubic-bezier(0.34, 1.18, 0.5, 1);
 }
 
 .spotify-lyrics-line-tier-1 {
@@ -1958,32 +1985,40 @@ export const SPOTIFY_WIDGET_CSS = `
   --spotify-lyrics-line-opacity: 0.42;
 }
 
-.spotify-lyrics-line-past.spotify-lyrics-line-tier-1,
+.spotify-lyrics-line-past.spotify-lyrics-line-tier-1 {
+  --spotify-lyrics-line-opacity: 0.5;
+}
+
 .spotify-lyrics-line-future.spotify-lyrics-line-tier-1 {
   --spotify-lyrics-line-opacity: 0.78;
 }
 
-.spotify-lyrics-line-past.spotify-lyrics-line-tier-2,
+.spotify-lyrics-line-past.spotify-lyrics-line-tier-2 {
+  --spotify-lyrics-line-opacity: 0.34;
+}
+
 .spotify-lyrics-line-future.spotify-lyrics-line-tier-2 {
   --spotify-lyrics-line-opacity: 0.56;
 }
 
-.spotify-lyrics-line-past.spotify-lyrics-line-tier-3,
+.spotify-lyrics-line-past.spotify-lyrics-line-tier-3 {
+  --spotify-lyrics-line-opacity: 0.24;
+}
+
 .spotify-lyrics-line-future.spotify-lyrics-line-tier-3 {
   --spotify-lyrics-line-opacity: 0.38;
 }
 
-.spotify-lyrics-line-past.spotify-lyrics-line-tier-4,
+.spotify-lyrics-line-past.spotify-lyrics-line-tier-4 {
+  --spotify-lyrics-line-opacity: 0.16;
+}
+
 .spotify-lyrics-line-future.spotify-lyrics-line-tier-4 {
   --spotify-lyrics-line-opacity: 0.24;
 }
 
-/* Depth blur is static and sits only on receding lines, never on the active or
-   adjacent line. A blur that animates, or that shares an element with a
-   transform, forces the compositor to re-rasterize that layer every frame and
-   leaves the text visibly soft mid-scale. These classes are emitted only while
-   the Lyrics blur setting is on, so a disabled blur leaves the text unfiltered
-   instead of carrying a no-op blur(0). */
+/* Keep the active and adjacent lines sharp. More distant lines use a small,
+   static blur, omitted entirely when the Lyrics blur setting is disabled. */
 .spotify-lyrics-line-blur-2 .spotify-lyrics-line-text {
   filter: blur(0.8px);
 }
@@ -2012,6 +2047,79 @@ export const SPOTIFY_WIDGET_CSS = `
   justify-content: center;
   line-height: 1;
   min-height: 1em;
+}
+
+.spotify-lyrics-return-live {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  max-width: calc(100% - 24px);
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.18));
+  background: var(--lumiverse-bg-elevated, #242733);
+  color: var(--lumiverse-text, #fff);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+
+.spotify-lyrics-return-live[hidden] {
+  display: none !important;
+}
+
+.spotify-lyrics-return-live:focus-visible,
+.spotify-lyrics-body:focus-visible,
+.spotify-modern-widget-lyrics-body:focus-visible {
+  outline: 2px solid var(--lumiverse-text-muted, #c6c8d2);
+  outline-offset: -2px;
+}
+
+.spotify-lyric-gap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 1em;
+  vertical-align: middle;
+  opacity: 0.45;
+  transition: opacity 100ms linear;
+}
+
+.spotify-lyric-gap-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.35;
+  transform: scale(0.8);
+}
+
+.spotify-lyrics-body[data-playing="true"],
+.spotify-modern-widget-lyrics-body[data-playing="true"] {
+  --spotify-lyric-gap-play-state: running;
+}
+
+.spotify-lyrics-line-active .spotify-lyric-gap,
+.spotify-modern-widget-lyric-line.active .spotify-lyric-gap {
+  opacity: var(--spotify-lyric-gap-opacity, 1);
+}
+
+.spotify-lyrics-line-active .spotify-lyric-gap-dot,
+.spotify-modern-widget-lyric-line.active .spotify-lyric-gap-dot {
+  animation: spotify-lyric-breathe 1800ms ease-in-out infinite;
+  animation-delay: calc(var(--spotify-lyric-dot-index) * 140ms);
+  animation-play-state: var(--spotify-lyric-gap-play-state, paused);
+}
+
+@keyframes spotify-lyric-breathe {
+  0%, 100% { opacity: 0.35; transform: scale(0.8) translateY(0); }
+  50% { opacity: 1; transform: scale(1.08) translateY(-1.5px); }
 }
 
 .spotify-lyrics-text-enter {
@@ -2065,10 +2173,15 @@ export const SPOTIFY_WIDGET_CSS = `
 @media (prefers-reduced-motion: reduce) {
   .spotify-lyrics-line,
   .spotify-lyrics-line .spotify-lyrics-line-text,
+  .spotify-modern-widget-lyric-line,
+  .spotify-modern-widget-lyric-text,
+  .spotify-lyric-gap,
+  .spotify-lyric-gap-dot,
   .spotify-lyrics-text,
+  .spotify-modern-widget-lyrics-status-loading,
   .spotify-lyrics-status-loading {
     animation: none !important;
-    transition: none;
+    transition: none !important;
   }
 }
 

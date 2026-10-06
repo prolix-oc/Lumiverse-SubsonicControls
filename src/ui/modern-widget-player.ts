@@ -5,7 +5,10 @@ import {
   parseSyncedLyrics,
 } from "./synced-lyrics-model";
 import { bindProgressCommitOnRelease, bindRangeCommitOnRelease } from "./release-commit";
-import { createLyricAutoScroller } from "./lyric-auto-scroll";
+import { createLyricViewport } from "./lyric-viewport";
+import { createLyricLineMotion, type LyricMotionLine } from "./lyric-line-motion";
+import { createLyricGap, updateLyricGap } from "./lyric-gap";
+import { createPlaybackClock, type PlaybackClock } from "./playback-clock";
 
 const ICON_PREV = `<svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>`;
 const ICON_PLAY = `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`;
@@ -145,7 +148,8 @@ export interface ModernWidgetPlayerUI {
 export function createModernWidgetPlayerUI(
   sendToBackend: (msg: unknown) => void,
   onExpandClick: () => void,
-  onCollapseClick: () => void
+  onCollapseClick: () => void,
+  playbackClock: PlaybackClock = createPlaybackClock(),
 ): ModernWidgetPlayerUI {
   const root = document.createElement("div");
   root.className = "spotify-modern-widget-player";
@@ -328,18 +332,21 @@ export function createModernWidgetPlayerUI(
   let state: PlaybackState | null = null;
   let isExpandedState = false;
   let currentDuration = 0;
-  let lastProgressMs = 0;
-  let lastUpdateTime = 0;
-  let lastIsPlaying = false;
   let animFrameId: number | null = null;
   let lyricsTrackUri: string | null = null;
-  const syncedLyricsModel = createSyncedLyricsModel();
+  const syncedLyricsModel = createSyncedLyricsModel(undefined, playbackClock);
   let plainLyricLines: string[] = [];
   let lyricsInstrumental = false;
   let lyricsLoading = false;
   let lastRenderedLyricSignature = "";
-  let syncedLyricEls: HTMLDivElement[] = [];
-  const autoScroll = createLyricAutoScroller(lyricsBody);
+  let syncedLyricEls: LyricMotionLine[] = [];
+  let presentedActiveLineIndex = -1;
+  let presentedClockRevision = playbackClock.getRevision();
+  const viewport = createLyricViewport(lyricsBody, () => centerActiveLyricLine());
+  lyricsSection.appendChild(viewport.returnButton);
+  stopEventPropagation(viewport.returnButton);
+  const autoScroll = viewport.autoScroll;
+  const lineMotion = createLyricLineMotion(lyricsBody);
   let lastMetadataSignature = "";
   let marqueeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let marqueeRefreshTimerLate: ReturnType<typeof setTimeout> | null = null;
@@ -351,15 +358,6 @@ export function createModernWidgetPlayerUI(
   });
   marqueeObserver.observe(meta);
   marqueeObserver.observe(root);
-
-  // A desktop pop-out starts at the compact widget size and then grows its
-  // native window. Re-center after each resulting lyric viewport resize so the
-  // active line is positioned using the final, visible geometry.
-  const lyricsResizeObserver = new ResizeObserver(() => {
-    if (!isExpandedState) return;
-    centerActiveLyricLine(true);
-  });
-  lyricsResizeObserver.observe(lyricsBody);
 
   function refreshMarquees(restart: boolean) {
     requestAnimationFrame(() => {
@@ -388,8 +386,7 @@ export function createModernWidgetPlayerUI(
   }
 
   function getInterpolatedProgressMs(): number {
-    if (!lastIsPlaying) return lastProgressMs;
-    return Math.min(lastProgressMs + Math.max(0, Date.now() - lastUpdateTime), currentDuration || Infinity);
+    return playbackClock.getProgressMs();
   }
 
   function setCompactProgress(pct: number, visible: boolean) {
@@ -399,41 +396,62 @@ export function createModernWidgetPlayerUI(
 
   function clearLyricsTrack() {
     autoScroll.cancel();
+    lineMotion.cancel();
+    viewport.reset();
+    updateLyricGap(lyricsBody, 0, false);
     lyricsTrack.innerHTML = "";
     lyricsBody.scrollTop = 0;
     syncedLyricEls = [];
+    presentedActiveLineIndex = -1;
   }
 
   function buildSyncedLyricsTrack() {
     clearLyricsTrack();
     const indexedLines = syncedLyricsModel.getIndexedLines();
     syncedLyricEls = indexedLines.map((line, renderIndex) => {
+      const anchorEl = document.createElement("div");
+      anchorEl.className = "spotify-lyric-line-anchor";
       const el = document.createElement("div");
       el.className = "spotify-modern-widget-lyric-line spotify-modern-widget-lyric-line-enter";
       el.style.setProperty("--spotify-modern-lyric-enter-delay", `${Math.min(renderIndex * 22, 110)}ms`);
-      el.textContent = line.displayText;
-      lyricsTrack.appendChild(el);
-      return el;
+      const textEl = document.createElement("div");
+      textEl.className = "spotify-modern-widget-lyric-text";
+      if (line.hasText) textEl.textContent = line.displayText;
+      else { el.classList.add("blank"); textEl.appendChild(createLyricGap()); }
+      el.appendChild(textEl);
+      anchorEl.appendChild(el);
+      lyricsTrack.appendChild(anchorEl);
+      return { index: line.index, anchorEl, el };
     });
+    viewport.setLines(syncedLyricEls.map((line) => line.anchorEl));
   }
 
-  function centerActiveLyricLine(force = false) {
-    if (!syncedLyricsModel.hasLyrics()) return;
+  function centerActiveLyricLine() {
+    if (!isExpandedState || !syncedLyricsModel.hasLyrics()) return false;
     const activeLineIndex = syncedLyricsModel.getActiveLineIndex();
     const activeEl = activeLineIndex >= 0 ? syncedLyricEls[activeLineIndex] : syncedLyricEls[0];
-    if (activeEl) autoScroll.center(activeEl, { force });
+    const timing = lineMotion.setCadence(syncedLyricsModel.getTimeUntilNextLineMs());
+    return activeEl ? autoScroll.center(activeEl.anchorEl, { timeConstantMs: timing.scrollTimeConstantMs }) : false;
   }
 
   function updateSyncedLyricsPresentation(shouldAutoscroll = true) {
     const activeLineIndex = syncedLyricsModel.getActiveLineIndex();
+    const previousIndex = presentedActiveLineIndex;
+    const discontinuity = presentedClockRevision !== playbackClock.getRevision();
+    presentedClockRevision = playbackClock.getRevision();
+    if (discontinuity) autoScroll.resume();
+    presentedActiveLineIndex = activeLineIndex;
+    lineMotion.setCadence(syncedLyricsModel.getTimeUntilNextLineMs());
     const indexedLines = syncedLyricsModel.getIndexedLines();
     indexedLines.forEach((line, idx) => {
-      const el = syncedLyricEls[idx];
+      const el = syncedLyricEls[idx]?.el;
       if (!el) return;
       el.className = "spotify-modern-widget-lyric-line";
+      if (!line.hasText) el.classList.add("blank");
       if (line.index === activeLineIndex) {
         el.classList.add("active");
       } else if (activeLineIndex >= 0) {
+        el.classList.add(line.index < activeLineIndex ? "past" : "future");
         const distance = Math.abs(line.index - activeLineIndex);
         if (distance === 1) el.classList.add("near");
         else if (distance === 2) el.classList.add("mid");
@@ -447,7 +465,12 @@ export function createModernWidgetPlayerUI(
 
     // A suspended scroller covers the open context menu case: scrolling would
     // dismiss the menu, so the scroller stays parked until it closes.
-    centerActiveLyricLine();
+    const gliding = centerActiveLyricLine();
+    if (gliding && !discontinuity && playbackClock.isPlaying() && previousIndex !== activeLineIndex) {
+      lineMotion.play(syncedLyricEls, previousIndex, activeLineIndex);
+    } else if (discontinuity || previousIndex !== activeLineIndex) {
+      lineMotion.cancel();
+    }
   }
 
   function renderLyrics() {
@@ -485,6 +508,8 @@ export function createModernWidgetPlayerUI(
       lastRenderedLyricSignature = nextSignature;
       buildSyncedLyricsTrack();
       updateSyncedLyricsPresentation(false);
+      centerActiveLyricLine();
+      syncFromClock();
       return;
     }
 
@@ -520,26 +545,28 @@ export function createModernWidgetPlayerUI(
       return;
     }
 
-    syncedLyricsModel.setPlayback({
-      trackUri: state.trackUri,
-      progressMs: getInterpolatedProgressMs(),
-      durationMs: currentDuration,
-      isPlaying: lastIsPlaying,
-      updatedAt: Date.now(),
-    });
-
+    syncedLyricsModel.refreshActiveLineIndex();
     if (force) {
       renderLyrics();
       return;
     }
 
-    if (syncedLyricsModel.refreshActiveLineIndex()) {
+    if (presentedActiveLineIndex !== syncedLyricsModel.getActiveLineIndex() || presentedClockRevision !== playbackClock.getRevision()) {
       updateSyncedLyricsPresentation(true);
     }
+    updateLyricGap(lyricsBody, syncedLyricsModel.getTimeUntilNextLineMs(), syncedLyricsModel.getActiveLine()?.hasText === false);
+  }
+
+  function syncFromClock() {
+    const matchesTrack = state?.trackUri === playbackClock.getTrackUri();
+    lyricsBody.dataset.playing = String(matchesTrack && playbackClock.isPlaying());
+    if (!matchesTrack || !connected) { stopTicking(); lineMotion.cancel(); return; }
+    if (!isProgressScrubbing) updateActiveLyricLine();
+    if (playbackClock.isPlaying()) startTicking(); else stopTicking();
   }
 
   function tickProgress() {
-    if (!state || !connected || !lastIsPlaying || !currentDuration) {
+    if (!state || !connected || !playbackClock.isPlaying()) {
       animFrameId = null;
       return;
     }
@@ -551,7 +578,7 @@ export function createModernWidgetPlayerUI(
     const interpolated = getInterpolatedProgressMs();
     const pct = currentDuration > 0 ? (interpolated / currentDuration) * 100 : 0;
     progressFill.style.width = `${pct}%`;
-    setCompactProgress(pct, true);
+    setCompactProgress(pct, currentDuration > 0);
     progressTime.textContent = formatTime(interpolated);
     updateActiveLyricLine();
     animFrameId = requestAnimationFrame(tickProgress);
@@ -600,11 +627,10 @@ export function createModernWidgetPlayerUI(
       if (state) {
         state = { ...state, progressMs: positionMs };
       }
-      lastProgressMs = positionMs;
-      lastUpdateTime = Date.now();
-      updateActiveLyricLine(true);
+      playbackClock.update(state, { seek: true });
+      updateActiveLyricLine();
       sendToBackend({ type: "seek", positionMs });
-      if (lastIsPlaying) startTicking();
+      if (playbackClock.isPlaying()) startTicking();
     },
     stopPropagation: true,
   });
@@ -620,6 +646,7 @@ export function createModernWidgetPlayerUI(
   });
 
   function update(playbackState: PlaybackState | null, isConnected: boolean) {
+    if (state?.trackUri !== playbackState?.trackUri) isProgressScrubbing = false;
     state = playbackState;
     connected = isConnected;
     root.dataset.empty = !playbackState ? "true" : "false";
@@ -638,7 +665,8 @@ export function createModernWidgetPlayerUI(
       setCompactProgress(0, false);
       renderCompactArt(null);
       renderHeroArt(null);
-      syncedLyricsModel.setPlayback(null);
+      playbackClock.update(null);
+      lyricsBody.dataset.playing = "false";
       lastMetadataSignature = "";
       stopTicking();
       renderLyrics();
@@ -663,7 +691,6 @@ export function createModernWidgetPlayerUI(
     emptyState.style.display = "none";
 
     currentDuration = playbackState.durationMs;
-    lastIsPlaying = playbackState.isPlaying;
     const canUseTransport = supportsMiniPlayerTransport();
     const transportChanged = root.dataset.transport !== String(canUseTransport);
     root.dataset.transport = String(canUseTransport);
@@ -675,25 +702,18 @@ export function createModernWidgetPlayerUI(
     // Neither remote integration offers a mini-player volume endpoint.
     volumeRow.hidden = true;
     volumeRow.style.display = "none";
-    syncedLyricsModel.setPlayback({
-      trackUri: playbackState.trackUri,
-      progressMs: isProgressScrubbing ? lastProgressMs : playbackState.progressMs,
-      durationMs: playbackState.durationMs,
-      isPlaying: playbackState.isPlaying,
-      updatedAt: isProgressScrubbing ? lastUpdateTime : Date.now(),
-    });
+    playbackClock.update(playbackState);
     playPauseBtn.innerHTML = playbackState.isPlaying ? ICON_PAUSE : ICON_PLAY;
     if (!isVolumeInteracting) {
       volumeSlider.value = String(playbackState.volume ?? Number(volumeSlider.value));
     }
 
     if (!isProgressScrubbing) {
-      lastProgressMs = playbackState.progressMs;
-      lastUpdateTime = Date.now();
-      const pct = playbackState.durationMs > 0 ? (playbackState.progressMs / playbackState.durationMs) * 100 : 0;
+      const progress = getInterpolatedProgressMs();
+      const pct = playbackState.durationMs > 0 ? (progress / playbackState.durationMs) * 100 : 0;
       progressFill.style.width = `${pct}%`;
       setCompactProgress(pct, playbackState.durationMs > 0);
-      progressTime.textContent = formatTime(playbackState.progressMs);
+      progressTime.textContent = formatTime(progress);
     }
     durationTime.textContent = formatTime(playbackState.durationMs);
 
@@ -709,8 +729,7 @@ export function createModernWidgetPlayerUI(
       requestAnimationFrame(() => requestAnimationFrame(() => updateSyncedLyricsPresentation(true)));
     }
     scheduleMarqueeRefresh(metadataChanged);
-    if (playbackState.isPlaying) startTicking();
-    else stopTicking();
+    syncFromClock();
   }
 
   function updateLyrics(trackUri: string | null, plainLyrics: string | null, syncedLyricsText: string | null, instrumental: boolean) {
@@ -734,6 +753,8 @@ export function createModernWidgetPlayerUI(
     renderLyrics();
   }
 
+  const unsubscribeClock = playbackClock.subscribe(syncFromClock);
+
   return {
     root,
     update,
@@ -746,6 +767,7 @@ export function createModernWidgetPlayerUI(
       else lyricsSection.style.setProperty("--spotify-lyrics-enter-blur", "0px");
     },
     setAutoScrollSuspended(suspended: boolean) {
+      if (suspended) lineMotion.cancel();
       if (autoScroll.suspend(suspended) && !suspended && syncedLyricsModel.hasLyrics()) {
         // Re-center on the active line now that the menu is gone.
         updateSyncedLyricsPresentation(true);
@@ -756,24 +778,29 @@ export function createModernWidgetPlayerUI(
     },
     setExpanded(expandedValue: boolean) {
       isExpandedState = expandedValue;
+      if (!expandedValue) {
+        autoScroll.cancel();
+        lineMotion.cancel();
+      }
       root.dataset.expanded = String(expandedValue);
       scheduleMarqueeRefresh(true);
       if (expandedValue) {
-        requestAnimationFrame(() => centerActiveLyricLine(true));
+        requestAnimationFrame(() => centerActiveLyricLine());
       }
     },
     isExpanded() {
       return isExpandedState;
     },
     destroy() {
+      unsubscribeClock();
       stopTicking();
-      autoScroll.destroy();
+      viewport.destroy();
+      lineMotion.destroy();
       cleanupProgressCommit();
       cleanupVolumeCommit();
       if (marqueeRefreshTimer) clearTimeout(marqueeRefreshTimer);
       if (marqueeRefreshTimerLate) clearTimeout(marqueeRefreshTimerLate);
       marqueeObserver.disconnect();
-      lyricsResizeObserver.disconnect();
       compactArt.destroy();
       heroArt.destroy();
       root.remove();

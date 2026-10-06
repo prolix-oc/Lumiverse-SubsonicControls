@@ -6,6 +6,7 @@ import { createNowPlayingUI } from "./ui/now-playing";
 import { createControlsUI } from "./ui/controls";
 import { createSearchUI } from "./ui/search";
 import { createLyricsUI } from "./ui/lyrics";
+import { createPlaybackClock } from "./ui/playback-clock";
 import { createMiniPlayerUI } from "./ui/mini-player";
 import { createModernWidgetPlayerUI } from "./ui/modern-widget-player";
 import { createCrossfadeArt, getTrackScopedArtUrl } from "./ui/crossfade-art";
@@ -197,7 +198,8 @@ export function setup(ctx: SpindleFrontendContext) {
   const nowPlaying = createNowPlayingUI();
   const controls = createControlsUI(send);
   const search = createSearchUI(send);
-  const lyrics = createLyricsUI();
+  const playbackClock = createPlaybackClock();
+  const lyrics = createLyricsUI(playbackClock);
   panel.append(nowPlaying.root, controls.root, search.root, lyrics.root);
   cleanups.push(() => nowPlaying.destroy(), () => controls.destroy(), () => search.destroy(), () => lyrics.destroy());
 
@@ -415,7 +417,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let modernWidgetExpanded = false;
   const WIDGET_SIZE_TRANSITION_MS = 420;
   let widgetSizeRequestTimer: ReturnType<typeof setTimeout> | null = null;
-  const modernWidget = createModernWidgetPlayerUI(send, () => tab.activate(), () => setModernWidgetExpanded(false));
+  const modernWidget = createModernWidgetPlayerUI(send, () => tab.activate(), () => setModernWidgetExpanded(false), playbackClock);
   widgetContent.appendChild(modernWidget.root);
   const miniPlayer = createMiniPlayerUI(send, () => tab.activate(), () => {
     const rect = widget.root.getBoundingClientRect();
